@@ -113,7 +113,6 @@ class Scene
     scope(exit) ThreadLocalStackAllocator.globalInstance.AllocatorDelete(remainingNodes);
 
     //fill the inital nodes
-    //TODO fix, needs to search all permutations NxN
     remainingNodes.resize(m_triangles.length);
     foreach(size_t i, ref triangle; m_triangles)
     {
@@ -125,6 +124,7 @@ class Scene
                                       max((triangle.v0 - centerPoint).squaredLength, 
                                           (triangle.v1 - centerPoint).squaredLength),
                                       (triangle.v2 - centerPoint).squaredLength);
+      assert(node.sphere.radiusSquared > 0.0f);
       node.dummy = null; //this means it is a leaf node
       node.triangle = &triangle;
     }
@@ -136,9 +136,11 @@ class Scene
       Node* nodeA = remainingNodes[nodeToMerge];
       auto centerPoint = nodeA.sphere.pos;
 
-      size_t smallestIndex = (nodeToMerge == 0) ? 1 : 0;
+      //size_t smallestIndex = nodeToMerge + 1;
+      size_t smallestIndex = (nodeToMerge) == 0 ? 1 : 0;
       float currentMinDistance = (remainingNodes[smallestIndex].sphere.pos - centerPoint).squaredLength;
 
+      //foreach(size_t i, nodeB; remainingNodes[nodeToMerge+2..remainingNodes.length])
       foreach(size_t i, nodeB; remainingNodes.toArray())
       {
         if(i == nodeToMerge)
@@ -147,6 +149,7 @@ class Scene
         if(dist < currentMinDistance)
         {
           currentMinDistance = dist;
+          //smallestIndex = i + 2 + nodeToMerge;
           smallestIndex = i;
         }
       }
@@ -155,8 +158,11 @@ class Scene
       assert(nodeA !is nodeB);
 
       Node* newNode = &m_nodes[nextNode++];
-      newNode.sphere.pos = (nodeA.sphere.pos + nodeB.sphere.pos) * 0.5f;
-      float newRadius = nodeA.sphere.radius + sqrt(currentMinDistance) + nodeB.sphere.radius;
+      float radiusA = nodeA.sphere.radius;
+      float radiusB = nodeB.sphere.radius;
+      vec3 rayThroughSpheres = (nodeB.sphere.pos - nodeA.sphere.pos).normalize();
+      newNode.sphere.pos = ((nodeA.sphere.pos - (rayThroughSpheres * radiusA)) + (nodeB.sphere.pos + (rayThroughSpheres * radiusB))) * 0.5f;
+      float newRadius = (radiusA + sqrt(currentMinDistance) + radiusB) * 0.5f;
       newNode.sphere.radiusSquared = newRadius * newRadius;
       newNode.childs[0] = nodeA;
       newNode.childs[1] = nodeB;
@@ -166,14 +172,17 @@ class Scene
       remainingNodes.removeAtIndexUnordered(smallestIndex);
 
       nodeToMerge++;
+      //if(nodeToMerge >= remainingNodes.length - 1)
       if(nodeToMerge >= remainingNodes.length)
         nodeToMerge = 0;
     }
     assert(remainingNodes.length == 1);
     m_rootNode = remainingNodes[0];
 
-    static void countDepth(Node* node, size_t depth, ref size_t minDepth, ref size_t maxDepth)
+    static void countDepth(Node* node, size_t depth, ref size_t minDepth, ref size_t maxDepth, ref float sumRadius, ref float numRadii)
     {
+      numRadii += 1.0f;
+      sumRadius += node.sphere.radius;
       if(node.dummy is null)
       {
         minDepth = min(depth, minDepth);
@@ -181,15 +190,17 @@ class Scene
       }
       else
       {
-        countDepth(node.childs[0], depth+1, minDepth, maxDepth);
-        countDepth(node.childs[1], depth+1, minDepth, maxDepth);
+        countDepth(node.childs[0], depth+1, minDepth, maxDepth, sumRadius, numRadii);
+        countDepth(node.childs[1], depth+1, minDepth, maxDepth, sumRadius, numRadii);
       }
     }
 
     size_t minDepth = size_t.max;
     size_t maxDepth = 0;
-    countDepth(m_rootNode, 0, minDepth, maxDepth);
-    writefln("min-depth: %d, max-depth: %d", minDepth, maxDepth);
+    float numRadii = 0.0f;
+    float sumRadius = 0.0f;
+    countDepth(m_rootNode, 0, minDepth, maxDepth, sumRadius, numRadii);
+    writefln("min-depth: %d, max-depth: %d, average-radius: %f", minDepth, maxDepth, sumRadius / numRadii);
   }
 
   ~this()
@@ -198,10 +209,25 @@ class Scene
     Delete(m_nodes);
   }
 
-  private static bool traceHelper(const(Node*) node, ref const(Ray) ray, ref float rayPos, ref vec3 normal)
+  private static bool traceHelper(const(Node*) node, ref const(Ray) ray, ref float rayPos, ref vec3 normal, uint depth)
   {
     if(node.sphere.intersects(ray))
     {
+      /*if(depth == 8)
+      {
+        float t = 0.0f;
+        if(node.sphere.computeNearestIntersection(ray, t))
+        {
+          if(t > 0.0f && t < rayPos)
+          {
+            vec3 point = ray.get(t);
+            rayPos = t;
+            normal = (point - node.sphere.pos).normalize();
+          }
+          return true;
+        }
+        return false;
+      }*/
       if(node.dummy is null)
       {
         //leaf node
@@ -209,7 +235,7 @@ class Scene
         if( node.triangle.intersects(ray, pos) && pos < rayPos && pos >= 0.0f )
         {
           auto n = node.triangle.plane.normal;
-          //if(n.dot(ray.dir) < 0)
+          if(n.dot(ray.dir) < 0)
           {
 					  rayPos = pos;
 					  normal = n;
@@ -221,8 +247,8 @@ class Scene
       else
       {
         //non leaf node
-        bool res1 = traceHelper(node.childs[0], ray, rayPos, normal);
-        bool res2 = traceHelper(node.childs[1], ray, rayPos, normal);
+        bool res1 = traceHelper(node.childs[0], ray, rayPos, normal, depth+1);
+        bool res2 = traceHelper(node.childs[1], ray, rayPos, normal, depth+1);
         return res1 || res2;
       }
     }
@@ -238,6 +264,10 @@ class Scene
   */
 	bool trace(Ray ray, ref float rayPos, ref vec3 normal) const {
 		rayPos = float.max;
-		return traceHelper(m_rootNode, ray, rayPos, normal);
+    debug {
+      FloatingPointControl fpctrl;
+      fpctrl.enableExceptions(FloatingPointControl.severeExceptions);
+    }
+		return traceHelper(m_rootNode, ray, rayPos, normal, 0);
 	}
 }

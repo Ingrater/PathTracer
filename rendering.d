@@ -34,7 +34,7 @@ shared static ~this()
 void loadScene()
 {
   g_camera = New!Camera(45.0f, cast(float)g_height / cast(float)g_width);
-  g_camera.setTransform(vec3(20, 0, 20), vec3(0, 0, 0), vec3(0, 0, 1));
+  g_camera.setTransform(vec3(20, 5, 20), vec3(0, 0, 0), vec3(0, 0, 1));
   g_scene = New!Scene("teapot.thModel");
   /*g_camera.setTransform(vec3(3, 3, 3), vec3(0, 0, 0), vec3(0, 0, 1));
   g_scene = New!Scene("chest1.thModel";)*/

@@ -3,6 +3,8 @@ module main;
 import std.random;
 import thBase.io;
 import thBase.math;
+import thBase.asserthandler;
+import thBase.timer;
 
 import sdl;
 import rendering;
@@ -71,11 +73,12 @@ void drawScreen(SDL.Surface* screen, Pixel[] pixels)
   SDL.Flip(screen); 
 }
 
-__gshared uint g_width = 320;
-__gshared uint g_height = 240;
+__gshared uint g_width = 640;
+__gshared uint g_height = 480;
 
 int main(string[] argv)
 {
+  thBase.asserthandler.Init();
   SDL.LoadDll("SDL.dll","libSDL-1.2.so.0");
 
   if(SDL.Init(SDL.INIT_VIDEO) < 0)
@@ -109,15 +112,24 @@ int main(string[] argv)
   uint step = g_width * 4;
   uint steps = cast(uint)(pixels.length / step);
 
+  auto timer = cast(shared(Timer))New!Timer();
+
+  float totalTime = 0.0f;
+
   while(run)
   {
     if(progress < steps)
     {
+      auto start = Zeitpunkt(timer);
       auto startIndex = progress * step;
       computeOutputColor(startIndex, pixels[startIndex..startIndex+step], gen);
       drawScreen(screen, pixels);
       progress++;
+      auto end = Zeitpunkt(timer);
+      totalTime += (end - start) / 1000.0f;
       writefln("progress %d", progress);
+      if(progress == steps)
+        writefln("timeTaken %f", totalTime);
     }
     while(SDL.PollEvent(&event)) 
     {      
