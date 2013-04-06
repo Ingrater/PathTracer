@@ -8,10 +8,29 @@ import thBase.format;
 import thBase.allocator;
 import thBase.math;
 import thBase.logging;
+import thBase.container.vector;
+import thBase.allocator;
+import thBase.io;
+
+import std.math;
 
 class Scene
 {
+  static struct Node
+  {
+    Sphere sphere;
+    union {
+      Node*[2] childs;
+      struct {
+        void* dummy;
+        Triangle* triangle;
+      }
+    }
+  }
+
   Triangle[] m_triangles;
+  Node[] m_nodes;
+  Node* m_rootNode;
 
   this(const(char)[] path)
   {
@@ -48,7 +67,13 @@ class Scene
 
     const(ModelLoader.NodeDrawData)* curNode = findLeaf(loader.modelData.rootNode);
     assert(curNode !is null, "no node with mesh found");
-    mat4 transform = loader.modelData.rootNode.transform;
+    mat4 transform = mat4.Identity().Right2Left();
+    //swap y and z axis so that z is up
+    /*transform.f[5] = 0.0f;
+    transform.f[6] = -1.0f;
+    transform.f[10] = 0.0f;
+    transform.f[9] = 1.0f;*/
+    transform = loader.modelData.rootNode.transform * transform;
     while(curNode !is null && curNode != loader.modelData.rootNode)
     {
       transform = curNode.transform * transform;
@@ -75,6 +100,133 @@ class Scene
       face.v2 = vertices[mesh.faces[i].indices[2]];
       face.plane = Plane(face.v0, face.v1, face.v2);
 		}
+
+    /*uint nodesNeeded = 0;
+    for(uint i=2; nodesNeeded < m_triangles.length; i*=2)
+    {
+      nodesNeeded += i;
+    }*/
+    m_nodes = NewArray!Node(m_triangles.length*2);
+
+    uint nextNode = m_triangles.length;
+    auto remainingNodes = ThreadLocalStackAllocator.globalInstance.AllocatorNew!(Vector!(Node*))();
+    scope(exit) ThreadLocalStackAllocator.globalInstance.AllocatorDelete(remainingNodes);
+
+    //fill the inital nodes
+    //TODO fix, needs to search all permutations NxN
+    remainingNodes.resize(m_triangles.length);
+    foreach(size_t i, ref triangle; m_triangles)
+    {
+      Node *node = &m_nodes[i];
+      remainingNodes[i] = node;
+      auto centerPoint = (triangle.v0 + triangle.v1 + triangle.v2) / 3.0f;      
+      node.sphere.pos = centerPoint;
+      node.sphere.radiusSquared = max(
+                                      max((triangle.v0 - centerPoint).squaredLength, 
+                                          (triangle.v1 - centerPoint).squaredLength),
+                                      (triangle.v2 - centerPoint).squaredLength);
+      node.dummy = null; //this means it is a leaf node
+      node.triangle = &triangle;
+    }
+
+    //merge the nodes until there is only 1 node left
+    size_t nodeToMerge = 0;
+    while(remainingNodes.length > 1)
+    {
+      Node* nodeA = remainingNodes[nodeToMerge];
+      auto centerPoint = nodeA.sphere.pos;
+
+      size_t smallestIndex = (nodeToMerge == 0) ? 1 : 0;
+      float currentMinDistance = (remainingNodes[smallestIndex].sphere.pos - centerPoint).squaredLength;
+
+      foreach(size_t i, nodeB; remainingNodes.toArray())
+      {
+        if(i == nodeToMerge)
+          continue;
+        float dist = (nodeB.sphere.pos - centerPoint).squaredLength;
+        if(dist < currentMinDistance)
+        {
+          currentMinDistance = dist;
+          smallestIndex = i;
+        }
+      }
+
+      Node* nodeB = remainingNodes[smallestIndex];
+      assert(nodeA !is nodeB);
+
+      Node* newNode = &m_nodes[nextNode++];
+      newNode.sphere.pos = (nodeA.sphere.pos + nodeB.sphere.pos) * 0.5f;
+      float newRadius = nodeA.sphere.radius + sqrt(currentMinDistance) + nodeB.sphere.radius;
+      newNode.sphere.radiusSquared = newRadius * newRadius;
+      newNode.childs[0] = nodeA;
+      newNode.childs[1] = nodeB;
+
+      assert(nodeToMerge != smallestIndex);
+      remainingNodes[nodeToMerge] = newNode;
+      remainingNodes.removeAtIndexUnordered(smallestIndex);
+
+      nodeToMerge++;
+      if(nodeToMerge >= remainingNodes.length)
+        nodeToMerge = 0;
+    }
+    assert(remainingNodes.length == 1);
+    m_rootNode = remainingNodes[0];
+
+    static void countDepth(Node* node, size_t depth, ref size_t minDepth, ref size_t maxDepth)
+    {
+      if(node.dummy is null)
+      {
+        minDepth = min(depth, minDepth);
+        maxDepth = max(depth, maxDepth);
+      }
+      else
+      {
+        countDepth(node.childs[0], depth+1, minDepth, maxDepth);
+        countDepth(node.childs[1], depth+1, minDepth, maxDepth);
+      }
+    }
+
+    size_t minDepth = size_t.max;
+    size_t maxDepth = 0;
+    countDepth(m_rootNode, 0, minDepth, maxDepth);
+    writefln("min-depth: %d, max-depth: %d", minDepth, maxDepth);
+  }
+
+  ~this()
+  {
+    Delete(m_triangles);
+    Delete(m_nodes);
+  }
+
+  private static bool traceHelper(const(Node*) node, ref const(Ray) ray, ref float rayPos, ref vec3 normal)
+  {
+    if(node.sphere.intersects(ray))
+    {
+      if(node.dummy is null)
+      {
+        //leaf node
+        float pos = -1.0f;
+        if( node.triangle.intersects(ray, pos) && pos < rayPos && pos >= 0.0f )
+        {
+          auto n = node.triangle.plane.normal;
+          //if(n.dot(ray.dir) < 0)
+          {
+					  rayPos = pos;
+					  normal = n;
+            return true;
+          }
+          return false;
+        }
+      }
+      else
+      {
+        //non leaf node
+        bool res1 = traceHelper(node.childs[0], ray, rayPos, normal);
+        bool res2 = traceHelper(node.childs[1], ray, rayPos, normal);
+        return res1 || res2;
+      }
+    }
+    return false;
   }
 
 	/**
@@ -84,23 +236,8 @@ class Scene
   *  rayPos = the position on the ray where it did intersect (out = result)
   *  normal = the normal at the intersection
   */
-	bool intersects(Ray ray, ref float rayPos, ref vec3 normal) const {
-		bool result = false;
+	bool trace(Ray ray, ref float rayPos, ref vec3 normal) const {
 		rayPos = float.max;
-		foreach(ref triangle; m_triangles){
-			float pos = -1.0f;
-			if( triangle.intersects(ray, pos) ){
-				if(pos < rayPos && pos >= 0.0f){
-          auto n = triangle.plane.normal;
-          if(n.dot(ray.dir) >= 0)
-          {
-            result = true;
-					  rayPos = pos;
-					  normal = n;
-          }
-				}
-			}
-		}
-		return result;
+		return traceHelper(m_rootNode, ray, rayPos, normal);
 	}
 }
