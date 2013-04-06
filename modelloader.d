@@ -38,6 +38,7 @@ public:
 
   static struct MaterialData
   {
+    const(char)[] name;
     TextureReference[] textures;
   }
 
@@ -45,7 +46,6 @@ public:
   {
     uint materialIndex;
     AlignedBoxLocal bbox;
-    uint numFaces;
     FaceData[] faces;
     vec3[] vertices;
     vec3[] normals;
@@ -141,7 +141,7 @@ public:
       throw New!RCException(format("File '%s' is not a thModel format", pFilename[]));
     }
 
-    if(file.fileVersion != ModelFormatVersion.Version1)
+    if(file.fileVersion > ModelFormatVersion.Version2)
     {
       throw New!RCException(format("Model '%s' does have old format, please reexport", pFilename[]));
     }
@@ -169,6 +169,7 @@ public:
       MemoryPool materialData;
       MemoryPool nodeNameMemory;
       MemoryPool texturePathMemory;
+      MemoryPool materialNameMemory;
       MemoryPool texturePathReferencesMemory;
       MemoryPool meshDataArray;
       MemoryPool vertexData;
@@ -190,6 +191,7 @@ public:
     loadTexCoords[3] = Load.TexCoords3;
 
     uint texturePathMemory;
+    uint materialNameMemory;
     //Read the size info
     {
       enum size_t alignmentOverhead = m_meshDataAllocator.alignment - 1;
@@ -216,6 +218,18 @@ public:
       {
         meshDataSize += texturePathMemory;
         memstat.texturePathMemory = MemoryPool(texturePathMemory);
+      }
+
+      if(file.fileVersion >= ModelFormatVersion.Version2)
+      {
+        file.read(materialNameMemory);
+        if(materialNameMemory % m_meshDataAllocator.alignment != 0)
+          materialNameMemory += m_meshDataAllocator.alignment - (materialNameMemory % m_meshDataAllocator.alignment);     
+        if(loadWhat.IsSet(Load.Materials))
+        {
+          meshDataSize += materialNameMemory;
+          memstat.materialNameMemory = MemoryPool(materialNameMemory);
+        }
       }
 
       uint numMaterials;
@@ -376,6 +390,16 @@ public:
         {
           memstat.materialData += allocationSize!MaterialData(numMaterials);
           m_modelData.materials = AllocatorNewArray!MaterialData(m_meshDataAllocator, numMaterials);
+
+          char[] materialNames;
+          size_t curNamePos = 0;
+          if(file.fileVersion >= ModelFormatVersion.Version2)
+          {
+            memstat.materialNameMemory += allocationSize!char(materialNameMemory);
+            materialNames = AllocatorNewArray!char(m_meshDataAllocator, materialNameMemory);
+          }
+         
+
           foreach(ref material; m_modelData.materials)
           {
             file.startReadChunk();
@@ -384,6 +408,18 @@ public:
               throw New!RCException(format("Expected 'mat' chunk but go '%s'", file.currentChunkName));
             }
 
+            //read material name
+            if(file.fileVersion >= ModelFormatVersion.Version2)
+            {
+              uint len;
+              file.read(len);
+              auto data = materialNames[curNamePos..(curNamePos+len)];
+              curNamePos += len;
+              file.read(data);
+              material.name = data;
+            }
+
+            //read textures
             uint numTextures;
             file.read(numTextures);
             memstat.textureReferenceMemory += allocationSize!TextureReference(numTextures);

@@ -5,6 +5,8 @@ import thBase.io;
 import thBase.math;
 import thBase.asserthandler;
 import thBase.timer;
+import thBase.task;
+import core.thread;
 
 import sdl;
 import rendering;
@@ -73,8 +75,47 @@ void drawScreen(SDL.Surface* screen, Pixel[] pixels)
   SDL.Flip(screen); 
 }
 
-__gshared uint g_width = 640;
-__gshared uint g_height = 480;
+__gshared bool g_run = true;
+
+class ComputeOutputTask : Task
+{
+  private:
+    uint m_pixelOffset;
+    Pixel[] m_pixels;
+    Random m_gen;
+    uint m_run;
+
+  public:
+    this(TaskIdentifier identifier, uint pixelOffset, Pixel[] pixels)
+    {
+      super(identifier);
+      m_pixelOffset = pixelOffset;
+      m_pixels = pixels;
+      m_run = 0;
+    }
+
+    override void Execute()
+    {
+      m_gen.seed(m_pixelOffset + m_run);
+      m_run += 1337;
+      computeOutputColor(m_pixelOffset, m_pixels, m_gen);
+    }
+
+    override void OnTaskFinished() {}
+}
+
+class Worker : Thread
+{
+  this()
+  {
+    super(&run);
+  }
+
+  void run()
+  {
+    g_localTaskQueue.executeTasksUntil( (){ return !g_run; } );
+  }
+}
 
 int main(string[] argv)
 {
@@ -103,7 +144,6 @@ int main(string[] argv)
   scope(exit) Delete(pixels);
 
   int h = 0;
-  bool run = true;
   SDL.Event event;
 
   Random gen;
@@ -111,14 +151,44 @@ int main(string[] argv)
   uint progress = 0;
   uint step = g_width * 4;
   uint steps = cast(uint)(pixels.length / step);
+  ComputeOutputTask[] tasks = NewArray!ComputeOutputTask(steps);
+  auto taskIdentifier = TaskIdentifier.Create!"ComputeOutputTask"();
+  for(uint i=0; i < steps; i++)
+  {
+    auto startIndex = i * step;
+    tasks[i] = New!ComputeOutputTask(taskIdentifier, startIndex, pixels[startIndex..startIndex+step]);
+  }
+  scope(exit)
+  {
+    foreach(task; tasks)
+      Delete(task);
+    Delete(tasks);
+  }
+  SmartPtr!(Worker)[] workers;
+  if(g_numThreads > 1)
+  {
+    workers = NewArray!(SmartPtr!Worker)(g_numThreads-1);
+    for(uint i=0; i<g_numThreads-1; i++)
+    {
+      workers[i] = New!Worker();
+      workers[i].start();
+    }
+  }
+  scope(exit)
+  {
+    if(g_numThreads > 1)
+      Delete(workers);
+  }
 
   auto timer = cast(shared(Timer))New!Timer();
+  scope(exit) Delete(timer);
 
   float totalTime = 0.0f;
 
-  while(run)
+  while(g_run)
   {
-    if(progress < steps)
+    // one time rendering
+    /*if(progress < steps)
     {
       auto start = Zeitpunkt(timer);
       auto startIndex = progress * step;
@@ -130,13 +200,35 @@ int main(string[] argv)
       writefln("progress %d", progress);
       if(progress == steps)
         writefln("timeTaken %f", totalTime);
+    }*/
+
+    // scanline rendering
+    /*{
+      auto startIndex = progress * step;
+      computeOutputColor(startIndex, pixels[startIndex..startIndex+step], gen);
+      drawScreen(screen, pixels);
+      progress++;
+      if(progress >= steps)
+        progress = 0;
+    }*/
+
+    // task based rendering
+    {
+      foreach(task; tasks)
+      {
+        spawn(task);
+      }
+      g_localTaskQueue.executeTasks();
+      while(!taskIdentifier.allFinished) { } //spin lock
+      drawScreen(screen, pixels);
     }
+
     while(SDL.PollEvent(&event)) 
     {      
       switch (event.type) 
       {
         case SDL.QUIT:
-          run = false;
+          g_run = false;
           break;
         /*case SDL.KEYDOWN:
           run = false;
@@ -144,6 +236,11 @@ int main(string[] argv)
         default:
       }
     }
+  }
+
+  foreach(worker; workers)
+  {
+    worker.join(false);
   }
 
   return 0;
