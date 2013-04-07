@@ -5,9 +5,11 @@ import camera;
 import scene;
 
 import thBase.math3d.all;
+import thBase.io;
 import std.random;
 import std.math;
 import core.simd;
+import core.stdc.math;
 
 // global variables
 __gshared Camera g_camera;
@@ -26,13 +28,13 @@ struct Pixel
   Color color;
   //Additional per pixel variables follow here
   float n = 0.0f;
-  float sum = 0.0f;
+  vec3 sum;
 };
 
 struct Material
 {
   float emessive;
-  Color color;
+  vec3 color;
 };
 
 shared static ~this()
@@ -56,9 +58,9 @@ void loadScene()
 
 void fillMaterial(ref Material mat, const(char)[] materialName)
 {
-  mat.color.r = 1.0f;
-  mat.color.g = 1.0f;
-  mat.color.b = 1.0f;
+  mat.color.x = 1.0f;
+  mat.color.y = 1.0f;
+  mat.color.z = 1.0f;
   mat.emessive = 0.0f;
   if(materialName == "Light")
   {
@@ -66,15 +68,15 @@ void fillMaterial(ref Material mat, const(char)[] materialName)
   }
   else if(materialName == "Red")
   {
-    mat.color.r = 1.0f;
-    mat.color.g = 0.0f;
-    mat.color.b = 0.0f;
+    mat.color.x = 1.0f;
+    mat.color.y = 0.0f;
+    mat.color.z = 0.0f;
   }
   else if(materialName == "Green")
   {
-    mat.color.r = 0.0f;
-    mat.color.g = 1.0f;
-    mat.color.b = 0.0f;
+    mat.color.x = 0.0f;
+    mat.color.y = 1.0f;
+    mat.color.z = 0.0f;
   }
 }
 
@@ -109,16 +111,18 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
     {
       vec3 hitPos = viewRay.get(rayPos);
 
-      float e = 0.0f;
-      for(uint i=0; i<5; i++)
+      auto e = vec3(0.0f, 0.0f, 0.0f);
+      for(uint i=0; i<10; i++)
       {
         e += evalRenderingEquation(hitPos, normal, data, gen, 0);
       }
-      pixel.n += 5.0f;
+      pixel.n += 10.0f;
       pixel.sum += e;
-      e = pixel.sum * PI / pixel.n;
+      e = pixel.sum / pixel.n;
 
-      pixel.color.r = pixel.color.g = pixel.color.b = e;
+      pixel.color.r = e.x;
+      pixel.color.g = e.y;
+      pixel.color.b = e.z;
       /*if(data.material.emessive > 0.0f)
       {
         pixel.color.r = pixel.color.g = pixel.color.b = 1.0f;
@@ -141,24 +145,25 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
 
 vec3 angleToLocalDirection(float phi, float psi)
 {
-  float cosPsi = cos(psi);
-  auto result = vec3(cos(phi) * cosPsi, sin(phi) * cosPsi, sin(psi));
+  float cosPsi = cosf(psi);
+  auto result = vec3(cosf(phi) * cosPsi, sinf(phi) * cosPsi, sinf(psi));
   return result;
 }
 
-float evalRenderingEquation(ref const(vec3) pos, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
+vec3 evalRenderingEquation(ref const(vec3) pos, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
 {
   const(float) BRDF = 1.0f / (PI * 2.0f);
-  if(depth >= 1)
+  if(depth > 3)// || uniform(0.0f, 1.0f, gen) > BRDF * 2.0f)
   {
-    return data.material.emessive;
+    //writefln("exit at depth %d", depth);
+    return data.material.emessive * data.material.color; 
   }
 
   float phi = uniform(0.0f, PI * 2.0f, gen);
   float psi = uniform(0.0f, PI_2, gen);
   auto outDir = angleToLocalDirection(phi, psi);
   outDir = data.localToWorld * outDir;
-  auto outRay = Ray(pos, outDir);
+  auto outRay = Ray(pos + normal * 0.01f, outDir);
 
   //trace into the scene
   float rayPos = 0.0f;
@@ -167,9 +172,10 @@ float evalRenderingEquation(ref const(vec3) pos, ref const(vec3) normal, const(S
   if( g_scene.trace(outRay, rayPos, hitNormal, hitData))
   {
     auto hitPos = outRay.get(rayPos);
-    auto result = evalRenderingEquation(hitPos, hitNormal, hitData, gen, depth + 1) * BRDF * normal.dot(outDir) + data.material.emessive;
+    auto result = (evalRenderingEquation(hitPos, hitNormal, hitData, gen, depth + 1) * BRDF * data.material.color * normal.dot(outDir)) * PI + data.material.emessive * data.material.color;
     //assert(result >= 0.0f);
     return result;
   }
-  return data.material.emessive;
+  //writefln("exit at depth %d", depth);
+  return data.material.emessive * data.material.color; 
 }

@@ -7,6 +7,7 @@ import thBase.asserthandler;
 import thBase.timer;
 import thBase.task;
 import core.thread;
+import core.stdc.math;
 
 import sdl;
 import rendering;
@@ -29,6 +30,9 @@ void drawScreen(SDL.Surface* screen, Pixel[] pixels)
     float one = 1.0f;
     float zero = 0.0f;
     float scale = 255.0f;
+    immutable(float) a = 0.055f;
+    immutable(float) aPlusOne = 1 + 0.055f;
+    immutable(float) power = 1 / 2.4f;
     asm {
       movss XMM0, one;
       pshufd XMM0, XMM0, 0b00_00_00_00; //shuffle xxxx
@@ -43,11 +47,22 @@ void drawScreen(SDL.Surface* screen, Pixel[] pixels)
       {
         Pixel* p = &pixels[g_width * y + x];
         uint[4] colors;
+        float[4] linear;
         asm {
           mov EAX, p;
           movups XMM3, [EAX];
           minps XMM3, XMM0; //min(x, 1)
           maxps XMM3, XMM1; //max(x, 0)
+          lea EAX, linear;
+          movups [EAX], XMM3;
+        }
+        linear[0] = (linear[0] <= 0.0031308f) ? linear[0] * 12.92f : aPlusOne * powf(linear[0], power) - a;
+        linear[1] = (linear[1] <= 0.0031308f) ? linear[1] * 12.92f : aPlusOne * powf(linear[1], power) - a;
+        linear[2] = (linear[2] <= 0.0031308f) ? linear[2] * 12.92f : aPlusOne * powf(linear[2], power) - a;
+
+        asm {
+          lea EAX, linear;
+          movups XMM3, [EAX];
           mulps XMM3, XMM2; //x *= 255.0f
           cvtps2dq XMM3, XMM3; //convert to int
           lea EAX, colors;
@@ -188,7 +203,7 @@ int main(string[] argv)
   while(g_run)
   {
     // one time rendering
-    /*if(progress < steps)
+    if(progress < steps)
     {
       auto start = Zeitpunkt(timer);
       auto startIndex = progress * step;
@@ -200,18 +215,19 @@ int main(string[] argv)
       writefln("progress %d", progress);
       if(progress == steps)
         writefln("timeTaken %f", totalTime);
-    }*/
+    }
 
     // scanline rendering
-    /*{
+    /*if(g_numThreads == 1)
+    {
       auto startIndex = progress * step;
       computeOutputColor(startIndex, pixels[startIndex..startIndex+step], gen);
       drawScreen(screen, pixels);
       progress++;
       if(progress >= steps)
         progress = 0;
-    }*/
-
+    }
+    else
     // task based rendering
     {
       foreach(task; tasks)
@@ -221,7 +237,8 @@ int main(string[] argv)
       g_localTaskQueue.executeTasks();
       while(!taskIdentifier.allFinished) { } //spin lock
       drawScreen(screen, pixels);
-    }
+      writefln("pass %d done", ++progress);
+    }*/
 
     while(SDL.PollEvent(&event)) 
     {      
