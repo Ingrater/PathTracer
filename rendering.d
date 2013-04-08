@@ -70,7 +70,7 @@ void fillMaterial(ref Material mat, const(char)[] materialName)
   mat.emessive = 0.0f;
   if(materialName == "Light")
   {
-    mat.emessive = 30.0f;
+    mat.emessive = 10.0f;
   }
   else if(materialName == "Red")
   {
@@ -148,12 +148,22 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
   }                          
 }
 
+/*
+psi = 0..360
+phi = 0..90
+
+cos(psi) -sin(psi)          0     cos(phi)     cos(psi) * cos(phi)
+sin(psi)  cos(psi)          0  *  0         =  sin(psi) * cos(phi)
+       0         0          1     sin(phi)  =  sin(phi)   
+*/
+
 vec3 angleToLocalDirection(float phi, float psi)
 {
-  float cosPsi = cosf(psi);
-  auto result = vec3(cosf(phi) * cosPsi, sinf(phi) * cosPsi, sinf(psi));
+  float cosPhi = cosf(phi);
+  auto result = vec3(cosf(psi) * cosPhi, sinf(psi) * cosPhi, sinf(phi));
   return result;
 }
+
 
 vec3 evalRenderingEquation(ref const(vec3) pos, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
 {
@@ -164,8 +174,8 @@ vec3 evalRenderingEquation(ref const(vec3) pos, ref const(vec3) normal, const(Sc
     return data.material.emessive * data.material.color; 
   }
 
-  float phi = uniform(0.0f, PI * 2.0f, gen);
-  float psi = uniform(0.0f, PI_2, gen);
+  float psi = uniform(0.0f, PI * 2.0f, gen);
+  float phi = uniform(0.0f, PI_2, gen);
   auto outDir = angleToLocalDirection(phi, psi);
   outDir = data.localToWorld * outDir;
   auto outRay = Ray(pos + normal * 0.001f, outDir);

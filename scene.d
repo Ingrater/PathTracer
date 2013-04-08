@@ -140,15 +140,15 @@ class Scene
         d.n2 = normals[mesh.faces[i].indices[2]];
         d.material = &m_materials[mesh.materialIndex];
 
-        auto n = triangles[i].plane.normal;
-        auto up = vec3(0,0,1);
-        if(n.dot(up) > 0.9f)
+        auto up = triangles[i].plane.normal;
+        auto dir = vec3(1,0,0);
+        if(abs(dir.dot(up)) > 0.9f)
         {
-          up = vec3(0,1,0);
+          dir = vec3(0,1,0);
         }
-        auto right = up.cross(n).normalize();
-        up = n.cross(right).normalize();
-        d.localToWorld = mat3(n, right, up);
+        auto right = up.cross(dir).normalize();
+        dir = up.cross(right).normalize();
+        d.localToWorld = mat3(dir, right, up);
       }
       currentFaceCount += mesh.faces.length;
     }
