@@ -183,6 +183,8 @@ class Scene
 
     //merge the nodes until there is only 1 node left
     size_t nodeToMerge = 0;
+    auto percent = m_triangles.length / 100;
+    uint progress = 1;
     while(remainingNodes.length > 1)
     {
       Node* nodeA = remainingNodes[nodeToMerge];
@@ -227,6 +229,11 @@ class Scene
       //if(nodeToMerge >= remainingNodes.length - 1)
       if(nodeToMerge >= remainingNodes.length)
         nodeToMerge = 0;
+
+      if(remainingNodes.length < m_triangles.length - (progress * percent))
+      {
+        writefln("building tree %d%% done", progress++);
+      }
     }
     assert(remainingNodes.length == 1);
     m_rootNode = remainingNodes[0];

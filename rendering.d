@@ -50,8 +50,14 @@ void loadScene()
   g_camera = New!Camera(30.0f, cast(float)g_height / cast(float)g_width);
   /*g_camera.setTransform(vec3(20, 5, 20), vec3(0, 0, 0), vec3(0, 0, 1));
   g_scene = New!Scene("teapot.thModel");*/
+
+  
   g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
   g_scene = New!Scene("cornell-box.thModel", &fillMaterial);
+
+  /*g_camera.setTransform(vec3(-1, 0, 7), vec3(0, 0, 7), vec3(0, 0, 1));
+  g_scene = New!Scene("sponza2.thModel", &fillMaterial);*/
+
   /*g_camera.setTransform(vec3(3, 3, 3), vec3(0, 0, 0), vec3(0, 0, 1));
   g_scene = New!Scene("chest1.thModel";)*/
 }
@@ -64,7 +70,7 @@ void fillMaterial(ref Material mat, const(char)[] materialName)
   mat.emessive = 0.0f;
   if(materialName == "Light")
   {
-    mat.emessive = 100.0f;
+    mat.emessive = 30.0f;
   }
   else if(materialName == "Red")
   {
@@ -130,15 +136,14 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
       else
       {
         float NdotL = abs(normal.dot(-viewRay.dir));
-        pixel.color.r = data.material.color.r * NdotL;
-        pixel.color.g = data.material.color.g * NdotL;
-        pixel.color.b = data.material.color.b * NdotL;
+        pixel.color.r = data.material.color.x * NdotL;
+        pixel.color.g = data.material.color.y * NdotL;
+        pixel.color.b = data.material.color.z * NdotL;
       }*/
     }
     else
     {
-      pixel.color.g = pixel.color.b = 0.0f;
-      pixel.color.r = 1.0f;
+      pixel.color.r = pixel.color.g = pixel.color.b = 0.0f;
     }
   }                          
 }
@@ -152,7 +157,7 @@ vec3 angleToLocalDirection(float phi, float psi)
 
 vec3 evalRenderingEquation(ref const(vec3) pos, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
 {
-  const(float) BRDF = 1.0f / (PI * 2.0f);
+  const(float) BRDF = 1.0f / (PI); //* 2.0f);
   if(depth > 3)// || uniform(0.0f, 1.0f, gen) > BRDF * 2.0f)
   {
     //writefln("exit at depth %d", depth);
@@ -163,7 +168,7 @@ vec3 evalRenderingEquation(ref const(vec3) pos, ref const(vec3) normal, const(Sc
   float psi = uniform(0.0f, PI_2, gen);
   auto outDir = angleToLocalDirection(phi, psi);
   outDir = data.localToWorld * outDir;
-  auto outRay = Ray(pos + normal * 0.01f, outDir);
+  auto outRay = Ray(pos + normal * 0.001f, outDir);
 
   //trace into the scene
   float rayPos = 0.0f;

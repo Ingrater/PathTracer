@@ -203,7 +203,7 @@ int main(string[] argv)
   while(g_run)
   {
     // one time rendering
-    if(progress < steps)
+    /*if(progress < steps)
     {
       auto start = Zeitpunkt(timer);
       auto startIndex = progress * step;
@@ -215,10 +215,10 @@ int main(string[] argv)
       writefln("progress %d", progress);
       if(progress == steps)
         writefln("timeTaken %f", totalTime);
-    }
+    }*/
 
     // scanline rendering
-    /*if(g_numThreads == 1)
+    if(g_numThreads == 1)
     {
       auto startIndex = progress * step;
       computeOutputColor(startIndex, pixels[startIndex..startIndex+step], gen);
@@ -230,15 +230,17 @@ int main(string[] argv)
     else
     // task based rendering
     {
-      foreach(task; tasks)
+      if(taskIdentifier.allFinished)
       {
-        spawn(task);
+        drawScreen(screen, pixels);
+        writefln("pass %d done", ++progress);
+        foreach(task; tasks)
+        {
+          spawn(task);
+        }
       }
-      g_localTaskQueue.executeTasks();
-      while(!taskIdentifier.allFinished) { } //spin lock
-      drawScreen(screen, pixels);
-      writefln("pass %d done", ++progress);
-    }*/
+      g_localTaskQueue.executeOneTask();      
+    }
 
     while(SDL.PollEvent(&event)) 
     {      
