@@ -8,6 +8,7 @@ import thBase.timer;
 import thBase.task;
 import core.thread;
 import core.stdc.math;
+static import core.cpuid;
 
 import sdl;
 import rendering;
@@ -25,14 +26,14 @@ void setPixel(SDL.Surface *screen, int x, int y, ubyte r, ubyte g, ubyte b)
 
 void drawScreen(SDL.Surface* screen, Pixel[] pixels)
 { 
+  immutable(float) a = 0.055f;
+  immutable(float) aPlusOne = 1 + 0.055f;
+  immutable(float) power = 1 / 2.4f;
   version(USE_SSE)
   {
     float one = 1.0f;
     float zero = 0.0f;
     float scale = 255.0f;
-    immutable(float) a = 0.055f;
-    immutable(float) aPlusOne = 1 + 0.055f;
-    immutable(float) power = 1 / 2.4f;
     asm {
       movss XMM0, one;
       pshufd XMM0, XMM0, 0b00_00_00_00; //shuffle xxxx
@@ -79,10 +80,13 @@ void drawScreen(SDL.Surface* screen, Pixel[] pixels)
       for(int x = 0; x < screen.width; x++ ) 
       {
         Pixel* p = &pixels[g_width * y + x];
-        ubyte r = cast(ubyte)(saturate(p.color.r) * 255.0f);
-        ubyte g = cast(ubyte)(saturate(p.color.g) * 255.0f);
-        ubyte b = cast(ubyte)(saturate(p.color.b) * 255.0f);
-        setPixel(screen, x, y, r, g, b);
+        float r = saturate(p.color.x);
+        float g = saturate(p.color.y);
+        float b = saturate(p.color.z);
+        r = (r <= 0.0031308f) ? r * 12.92f : aPlusOne * powf(r, power) - a;
+        g = (g <= 0.0031308f) ? g * 12.92f : aPlusOne * powf(g, power) - a;
+        b = (b <= 0.0031308f) ? b * 12.92f : aPlusOne * powf(b, power) - a;
+        setPixel(screen, x, y, cast(ubyte)(r * 255.0f), cast(ubyte)(g * 255.0f), cast(ubyte)(b * 255.0f));
       }
     }
   }
@@ -92,6 +96,7 @@ void drawScreen(SDL.Surface* screen, Pixel[] pixels)
 
 __gshared bool g_run = true;
 
+// Task which triggeres the computation
 class ComputeOutputTask : Task
 {
   private:
@@ -119,6 +124,7 @@ class ComputeOutputTask : Task
     override void OnTaskFinished() {}
 }
 
+// Worker thread
 class Worker : Thread
 {
   this()
@@ -134,6 +140,15 @@ class Worker : Thread
 
 int main(string[] argv)
 {
+  version(USE_SSE)
+  {
+    if(!core.cpuid.sse41)
+    {
+      writefln("Your processor does not support SSE 4.1 please use the non SSE version");
+      return 1;
+    }
+  }
+
   thBase.asserthandler.Init();
   SDL.LoadDll("SDL.dll","libSDL-1.2.so.0");
 

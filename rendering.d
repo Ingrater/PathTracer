@@ -18,25 +18,23 @@ __gshared uint g_width = 320;
 __gshared uint g_height = 240;
 __gshared uint g_numThreads = 8;
 
-struct Color
-{
-  float r = 0.0f, g = 0.0f, b = 0.0f;
-}
-
+// Holds all information for a single pixel visible on the screen
 struct Pixel
 {
-  Color color;
-  //Additional per pixel variables follow here
+  vec3 color; //resulting pixel color. Each component has to be in the range [0,1]
+  // Define additional per pixel values here
   float n = 0.0f;
   vec3 sum;
 };
 
+// Holds all information about a material
 struct Material
 {
   float emessive;
   vec3 color;
 };
 
+// Gets called on program shutdown
 shared static ~this()
 {
   Delete(g_camera);
@@ -44,7 +42,7 @@ shared static ~this()
 }
 
 
-
+// Loads the scene and creates a camera
 void loadScene()
 {
   g_camera = New!Camera(30.0f, cast(float)g_height / cast(float)g_width);
@@ -62,6 +60,7 @@ void loadScene()
   g_scene = New!Scene("chest1.thModel";)*/
 }
 
+// Called for each material found in the model file
 void fillMaterial(ref Material mat, const(char)[] materialName)
 {
   mat.color.x = 1.0f;
@@ -86,6 +85,7 @@ void fillMaterial(ref Material mat, const(char)[] materialName)
   }
 }
 
+// Computes a view ray for a given pixel index
 Ray getViewRay(uint pixelIndex)
 {
   float x = cast(float)(pixelIndex % g_width) / cast(float)g_width * 2.0f - 1.0f;
@@ -126,9 +126,9 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
       pixel.sum += e;
       e = pixel.sum / pixel.n;
 
-      pixel.color.r = e.x;
-      pixel.color.g = e.y;
-      pixel.color.b = e.z;
+      pixel.color.x = e.x;
+      pixel.color.y = e.y;
+      pixel.color.z = e.z;
       /*if(data.material.emessive > 0.0f)
       {
         pixel.color.r = pixel.color.g = pixel.color.b = 1.0f;
@@ -143,7 +143,7 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
     }
     else
     {
-      pixel.color.r = pixel.color.g = pixel.color.b = 0.0f;
+      pixel.color.x = pixel.color.y = pixel.color.z = 0.0f;
     }
   }                          
 }
@@ -152,9 +152,9 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
 psi = 0..360
 phi = 0..90
 
-cos(psi) -sin(psi)          0     cos(phi)     cos(psi) * cos(phi)
-sin(psi)  cos(psi)          0  *  0         =  sin(psi) * cos(phi)
-       0         0          1     sin(phi)  =  sin(phi)   
+(cos(psi) -sin(psi)   0)     (cos(phi))     (cos(psi) * cos(phi))
+(sin(psi)  cos(psi)   0)  *  (0       )  =  (sin(psi) * cos(phi))
+(       0         0   1)     (sin(phi))  =  (sin(phi)           )
 */
 
 vec3 angleToLocalDirection(float phi, float psi)

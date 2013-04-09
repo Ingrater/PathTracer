@@ -32,11 +32,12 @@ class Scene
     }
   }
 
+  // Data stored for each triangle
   static struct TriangleData
   {
-    vec3 n0, n1, n2;
-    Material* material;
-    mat3 localToWorld;
+    vec3 n0, n1, n2; // the normals at the three vertices of the triangle
+    Material* material; // the material of the triangle
+    mat3 localToWorld; // triangle space to world space transformation matrix
   }
 
   Triangle[] m_triangles;
@@ -348,4 +349,13 @@ class Scene
     }
 		return traceHelper(m_rootNode, ray, rayPos, normal, data);
 	}
+
+  /**
+   * Computes the triangle index from a given triangle data
+   */
+  size_t getTriangleIndex(const(TriangleData*) data)
+  {
+    assert(data > m_data.ptr, "not a valid data pointer");
+    return cast(size_t)(data - m_data.ptr);
+  }
 }
