@@ -16,7 +16,7 @@ __gshared Camera g_camera;
 __gshared Scene g_scene;
 __gshared uint g_width = 320;
 __gshared uint g_height = 240;
-__gshared uint g_numThreads = 8;
+__gshared uint g_numThreads = 4;
 
 // Holds all information for a single pixel visible on the screen
 struct Pixel
@@ -46,8 +46,9 @@ shared static ~this()
 void loadScene()
 {
   g_camera = New!Camera(30.0f, cast(float)g_height / cast(float)g_width);
-  /*g_camera.setTransform(vec3(20, 5, 20), vec3(0, 0, 0), vec3(0, 0, 1));
-  g_scene = New!Scene("teapot.thModel");*/
+  
+  /*g_camera.setTransform(vec3(25, 10, 20), vec3(0, 0, 0), vec3(0, 0, 1));
+  g_scene = New!Scene("teapot.thModel", &fillMaterial);*/
 
   
   g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
@@ -115,21 +116,24 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
     const(Scene.TriangleData)* data;
     if( g_scene.trace(viewRay, rayPos, normal, data))
     {
-      /*vec3 hitPos = viewRay.get(rayPos);
+      vec3 hitPos = viewRay.get(rayPos);
 
       auto e = vec3(0.0f, 0.0f, 0.0f);
-      for(uint i=0; i<10; i++)
+      enum uint N = 10;
+      //naive sampling
+      for(uint i=0; i<N; i++)
       {
         e += evalRenderingEquation(hitPos, normal, data, gen, 0);
       }
-      pixel.n += 10.0f;
+      
+      pixel.n += cast(float)N;
       pixel.sum += e;
       e = pixel.sum / pixel.n;
 
       pixel.color.x = e.x;
       pixel.color.y = e.y;
-      pixel.color.z = e.z;*/
-      if(data.material.emessive > 0.0f)
+      pixel.color.z = e.z;
+      /*if(data.material.emessive > 0.0f)
       {
         pixel.color.x = pixel.color.y = pixel.color.z = 1.0f;
       }
@@ -139,7 +143,11 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
         pixel.color.x = data.material.color.x * NdotL;
         pixel.color.y = data.material.color.y * NdotL;
         pixel.color.z = data.material.color.z * NdotL;
-      }
+      }*/
+      /*float NdotL = abs(normal.dot(-viewRay.dir));
+      pixel.color.x = NdotL;
+      pixel.color.y = NdotL;
+      pixel.color.z = NdotL;*/
     }
     else
     {
