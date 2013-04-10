@@ -115,7 +115,7 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
     const(Scene.TriangleData)* data;
     if( g_scene.trace(viewRay, rayPos, normal, data))
     {
-      vec3 hitPos = viewRay.get(rayPos);
+      /*vec3 hitPos = viewRay.get(rayPos);
 
       auto e = vec3(0.0f, 0.0f, 0.0f);
       for(uint i=0; i<10; i++)
@@ -128,22 +128,23 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
 
       pixel.color.x = e.x;
       pixel.color.y = e.y;
-      pixel.color.z = e.z;
-      /*if(data.material.emessive > 0.0f)
+      pixel.color.z = e.z;*/
+      if(data.material.emessive > 0.0f)
       {
-        pixel.color.r = pixel.color.g = pixel.color.b = 1.0f;
+        pixel.color.x = pixel.color.y = pixel.color.z = 1.0f;
       }
       else
       {
         float NdotL = abs(normal.dot(-viewRay.dir));
-        pixel.color.r = data.material.color.x * NdotL;
-        pixel.color.g = data.material.color.y * NdotL;
-        pixel.color.b = data.material.color.z * NdotL;
-      }*/
+        pixel.color.x = data.material.color.x * NdotL;
+        pixel.color.y = data.material.color.y * NdotL;
+        pixel.color.z = data.material.color.z * NdotL;
+      }
     }
     else
     {
-      pixel.color.x = pixel.color.y = pixel.color.z = 0.0f;
+      pixel.color.x = pixel.color.z = 1.0f;
+      pixel.color.y = 0.0f;
     }
   }                          
 }

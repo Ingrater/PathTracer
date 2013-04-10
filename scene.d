@@ -176,7 +176,7 @@ class Scene
       node.sphere.radiusSquared = max(
                                       max((triangle.v0 - centerPoint).squaredLength, 
                                           (triangle.v1 - centerPoint).squaredLength),
-                                      (triangle.v2 - centerPoint).squaredLength);
+                                      (triangle.v2 - centerPoint).squaredLength) + 0.01f;
       assert(node.sphere.radiusSquared > 0.0f);
       node.dummy = null; //this means it is a leaf node
       node.triangle = &triangle;
@@ -217,7 +217,7 @@ class Scene
       float radiusB = nodeB.sphere.radius;
       vec3 rayThroughSpheres = (nodeB.sphere.pos - nodeA.sphere.pos).normalize();
       newNode.sphere.pos = ((nodeA.sphere.pos - (rayThroughSpheres * radiusA)) + (nodeB.sphere.pos + (rayThroughSpheres * radiusB))) * 0.5f;
-      float newRadius = (radiusA + sqrt(currentMinDistance) + radiusB) * 0.5f;
+      float newRadius = (radiusA + sqrt(currentMinDistance) + radiusB) * 0.5f + 0.01f;
       newNode.sphere.radiusSquared = newRadius * newRadius;
       newNode.childs[0] = nodeA;
       newNode.childs[1] = nodeB;
