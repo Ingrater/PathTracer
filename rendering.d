@@ -16,7 +16,7 @@ __gshared Camera g_camera;
 __gshared Scene g_scene;
 __gshared uint g_width = 320;
 __gshared uint g_height = 240;
-__gshared uint g_numThreads = 4;
+__gshared uint g_numThreads = 8;
 
 // Holds all information for a single pixel visible on the screen
 struct Pixel
@@ -94,6 +94,33 @@ Ray getViewRay(uint pixelIndex)
   return g_camera.getScreenRay(x, y);
 }
 
+/*FUNCTION (index, base)
+BEGIN
+result = 0;
+f = 1 / base;
+i = index;
+WHILE (i > 0) 
+BEGIN
+result = result + f * (i % base);
+i = FLOOR(i / base);
+f = f / base;
+END
+RETURN result;
+END*/
+
+float haltonSequence(float index, float base)
+{
+  float result = 0;
+  float f = 1.0f / base;
+  while(index > 0.0f)
+  {
+    result = result + f * (core.stdc.math.fmod(index, base));
+    index = floorf(index / base);
+    f = f / base;
+  }
+  return result;
+}
+
 /**
  * computes the output color of the generated image
  * 
@@ -119,11 +146,40 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
       vec3 hitPos = viewRay.get(rayPos);
 
       auto e = vec3(0.0f, 0.0f, 0.0f);
-      enum uint N = 10;
+      enum uint N = 9;
       //naive sampling
+      /*for(uint i=0; i<N; i++)
+      {
+        float psi = uniform(0.0f, PI * 2.0f, gen);
+        float phi = uniform(0.0f, PI_2, gen);
+        auto outDir = angleToLocalDirection(phi, psi);
+        outDir = data.localToWorld * outDir;
+        e += evalRenderingEquation(outDir, hitPos, normal, data, gen, 0);
+      }*/
+
+      // grid sampling
+      /*
+      immutable(float) step = 1.0f / 3.0f;
+      for(uint x=0; x<3; x++)
+      {
+        for(uint y=0; y<3; y++)
+        {
+          float psi = uniform(x * step * PI * 2.0f, (x+1) * step * PI * 2.0f, gen);
+          float phi = uniform(y * step * PI_2, (y+1) * step * PI_2, gen);
+          auto outDir = angleToLocalDirection(phi, psi);
+          outDir = data.localToWorld * outDir;
+          e += evalRenderingEquation(outDir, hitPos, normal, data, gen, 0);
+        }
+      }*/
+
+      //halton sampling
       for(uint i=0; i<N; i++)
       {
-        e += evalRenderingEquation(hitPos, normal, data, gen, 0);
+        float psi = haltonSequence(pixel.n + i, 2.0f) * PI * 2.0f;
+        float phi = haltonSequence(pixel.n + i, 3.0f) * PI_2;
+        auto outDir = angleToLocalDirection(phi, psi);
+        outDir = data.localToWorld * outDir;
+        e += evalRenderingEquation(outDir, hitPos, normal, data, gen, 0);
       }
       
       pixel.n += cast(float)N;
@@ -173,21 +229,15 @@ vec3 angleToLocalDirection(float phi, float psi)
   return result;
 }
 
-
-vec3 evalRenderingEquation(ref const(vec3) pos, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
+vec3 evalRenderingEquation(ref const(vec3) dir, ref const(vec3) pos, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
 {
   const(float) BRDF = 1.0f / (PI); //* 2.0f);
-  if(depth > 3)// || uniform(0.0f, 1.0f, gen) > BRDF * 2.0f)
+  if(depth > 0 || data.material.emessive > 0.0f)// || uniform(0.0f, 1.0f, gen) > BRDF * 2.0f)
   {
     //writefln("exit at depth %d", depth);
     return data.material.emessive * data.material.color; 
   }
-
-  float psi = uniform(0.0f, PI * 2.0f, gen);
-  float phi = uniform(0.0f, PI_2, gen);
-  auto outDir = angleToLocalDirection(phi, psi);
-  outDir = data.localToWorld * outDir;
-  auto outRay = Ray(pos + normal * 0.001f, outDir);
+  auto outRay = Ray(pos + normal * 0.001f, dir);
 
   //trace into the scene
   float rayPos = 0.0f;
@@ -196,7 +246,17 @@ vec3 evalRenderingEquation(ref const(vec3) pos, ref const(vec3) normal, const(Sc
   if( g_scene.trace(outRay, rayPos, hitNormal, hitData))
   {
     auto hitPos = outRay.get(rayPos);
-    auto result = (evalRenderingEquation(hitPos, hitNormal, hitData, gen, depth + 1) * BRDF * data.material.color * normal.dot(outDir)) * PI + data.material.emessive * data.material.color;
+
+    /*float index = cast(float)uniform(0, 900, gen);
+    float psi = haltonSequence(index, 2.0f) * PI * 2.0f;
+    float phi = haltonSequence(index, 3.0f) * PI_2;*/
+
+    float psi = uniform(0.0f, PI * 2.0f, gen);
+    float phi = uniform(0.0f, PI_2, gen);
+    auto outDir = angleToLocalDirection(phi, psi);
+    outDir = hitData.localToWorld * outDir;
+
+    auto result = (evalRenderingEquation(outDir, hitPos, hitNormal, hitData, gen, depth + 1) * BRDF * data.material.color * normal.dot(dir)) * PI + data.material.emessive * data.material.color;
     //assert(result >= 0.0f);
     return result;
   }

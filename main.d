@@ -242,7 +242,7 @@ int main(string[] argv)
       if(progress >= steps)
         progress = 0;
     }
-    else
+    else if(progress < 100)
     // task based rendering
     {
       if(taskIdentifier.allFinished)

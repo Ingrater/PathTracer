@@ -15,6 +15,7 @@ import thBase.io;
 import thBase.algorithm;
 
 import std.math;
+import core.stdc.math;
 
 class Scene
 {
@@ -213,14 +214,27 @@ class Scene
       assert(nodeA !is nodeB);
 
       Node* newNode = &m_nodes[nextNode++];
-      float radiusA = nodeA.sphere.radius;
-      float radiusB = nodeB.sphere.radius;
-      vec3 rayThroughSpheres = (nodeB.sphere.pos - nodeA.sphere.pos).normalize();
-      newNode.sphere.pos = ((nodeA.sphere.pos - (rayThroughSpheres * radiusA)) + (nodeB.sphere.pos + (rayThroughSpheres * radiusB))) * 0.5f;
-      float newRadius = (radiusA + sqrt(currentMinDistance) + radiusB) * 0.5f + 0.01f;
-      newNode.sphere.radiusSquared = newRadius * newRadius;
+      if(nodeA.sphere in nodeB.sphere)
+      {
+        newNode.sphere = nodeB.sphere;
+      }
+      else if(nodeB.sphere in nodeA.sphere)
+      {
+        newNode.sphere = nodeA.sphere;
+      }
+      else
+      {
+        float radiusA = nodeA.sphere.radius;
+        float radiusB = nodeB.sphere.radius;
+        vec3 rayThroughSpheres = (nodeB.sphere.pos - nodeA.sphere.pos).normalize();
+        newNode.sphere.pos = ((nodeA.sphere.pos - (rayThroughSpheres * radiusA)) + (nodeB.sphere.pos + (rayThroughSpheres * radiusB))) * 0.5f;
+        float newRadius = (radiusA + sqrtf(currentMinDistance) + radiusB) * 0.5f + 0.01f;
+        newNode.sphere.radiusSquared = newRadius * newRadius;
+      }
       newNode.childs[0] = nodeA;
       newNode.childs[1] = nodeB;
+      assert(nodeA.sphere in newNode.sphere);
+      assert(nodeB.sphere in newNode.sphere);
 
       assert(nodeToMerge != smallestIndex);
       remainingNodes[nodeToMerge] = newNode;
@@ -308,12 +322,12 @@ class Scene
             float u1 = x * u;
             float v1 = x * v;
             const float sqrt2 = 1.414213562f;
-            float d1 = sqrt((1.0f-u1)*(1.0f-u1) + v1*v1) / sqrt2;
-            float d2 = sqrt(u1*u1 + (1.0f-v1)*(1.0f-v1)) / sqrt2;
+            float d1 = sqrtf((1.0f-u1)*(1.0f-u1) + v1*v1) / sqrt2;
+            float d2 = sqrtf(u1*u1 + (1.0f-v1)*(1.0f-v1)) / sqrt2;
             vec3 interpolated1 = ldata.n1 * d1 + ldata.n2 * d2;
 
-            float len = sqrt(u1*u1 + v1*v1);
-            float i1 = sqrt(u*u+v*v) / len;
+            float len = sqrtf(u1*u1 + v1*v1);
+            float i1 = sqrtf(u*u+v*v) / len;
             float i2 = 1.0f - i1;
 
             normal = ldata.n0 * i2 + interpolated1 * i1;
