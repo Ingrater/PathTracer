@@ -195,6 +195,13 @@ int main(string[] argv)
     Delete(tasks);
   }
   SmartPtr!(Worker)[] workers;
+
+  auto threadsPerCPU = core.cpuid.threadsPerCPU;
+  if(g_numThreads > threadsPerCPU)
+  {
+    g_numThreads = threadsPerCPU;
+  }
+
   if(g_numThreads > 1)
   {
     workers = NewArray!(SmartPtr!Worker)(g_numThreads-1);
@@ -214,6 +221,8 @@ int main(string[] argv)
   scope(exit) Delete(timer);
 
   float totalTime = 0.0f;
+
+  auto startRendering = Zeitpunkt(timer);
 
   while(g_run)
   {
@@ -242,19 +251,33 @@ int main(string[] argv)
       if(progress >= steps)
         progress = 0;
     }
-    else if(progress < 100)
+    else if(progress < 1)
     // task based rendering
     {
       if(taskIdentifier.allFinished)
       {
         drawScreen(screen, pixels);
-        writefln("pass %d done", ++progress);
+        if(progress > 0)
+          writefln("pass %d done", progress);
+        progress++;
         foreach(task; tasks)
         {
           spawn(task);
         }
       }
       g_localTaskQueue.executeOneTask();      
+    }
+    else
+    {
+      if(taskIdentifier.allFinished)
+      {
+        drawScreen(screen, pixels);
+        g_run = false;
+      }
+      else
+      {
+        g_localTaskQueue.executeOneTask();  
+      }
     }
 
     while(SDL.PollEvent(&event)) 
@@ -276,6 +299,10 @@ int main(string[] argv)
   {
     worker.join(false);
   }
+
+  auto endRendering = Zeitpunkt(timer);
+  writefln("Rendering took %f seconds", (endRendering - startRendering) / 1000.0f);
+  core.stdc.stdlib.system("pause");
 
   return 0;
 }

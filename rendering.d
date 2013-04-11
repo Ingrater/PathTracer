@@ -94,20 +94,6 @@ Ray getViewRay(uint pixelIndex)
   return g_camera.getScreenRay(x, y);
 }
 
-/*FUNCTION (index, base)
-BEGIN
-result = 0;
-f = 1 / base;
-i = index;
-WHILE (i > 0) 
-BEGIN
-result = result + f * (i % base);
-i = FLOOR(i / base);
-f = f / base;
-END
-RETURN result;
-END*/
-
 float haltonSequence(float index, float base)
 {
   float result = 0;
@@ -148,14 +134,14 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
       auto e = vec3(0.0f, 0.0f, 0.0f);
       enum uint N = 9;
       //naive sampling
-      /*for(uint i=0; i<N; i++)
+      for(uint i=0; i<N; i++)
       {
         float psi = uniform(0.0f, PI * 2.0f, gen);
         float phi = uniform(0.0f, PI_2, gen);
         auto outDir = angleToLocalDirection(phi, psi);
         outDir = data.localToWorld * outDir;
         e += evalRenderingEquation(outDir, hitPos, normal, data, gen, 0);
-      }*/
+      }
 
       // grid sampling
       /*
@@ -173,14 +159,14 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
       }*/
 
       //halton sampling
-      for(uint i=0; i<N; i++)
+      /*for(uint i=0; i<N; i++)
       {
         float psi = haltonSequence(pixel.n + i, 2.0f) * PI * 2.0f;
         float phi = haltonSequence(pixel.n + i, 3.0f) * PI_2;
         auto outDir = angleToLocalDirection(phi, psi);
         outDir = data.localToWorld * outDir;
         e += evalRenderingEquation(outDir, hitPos, normal, data, gen, 0);
-      }
+      }*/
       
       pixel.n += cast(float)N;
       pixel.sum += e;
@@ -232,7 +218,7 @@ vec3 angleToLocalDirection(float phi, float psi)
 vec3 evalRenderingEquation(ref const(vec3) dir, ref const(vec3) pos, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
 {
   const(float) BRDF = 1.0f / (PI); //* 2.0f);
-  if(depth > 0 || data.material.emessive > 0.0f)// || uniform(0.0f, 1.0f, gen) > BRDF * 2.0f)
+  if(depth > 3 || data.material.emessive > 0.0f)// || uniform(0.0f, 1.0f, gen) > BRDF * 2.0f)
   {
     //writefln("exit at depth %d", depth);
     return data.material.emessive * data.material.color; 

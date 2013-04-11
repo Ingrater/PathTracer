@@ -10,12 +10,17 @@ import thBase.allocator;
 import thBase.math;
 import thBase.logging;
 import thBase.container.vector;
+import thBase.container.octree;
+import thBase.policies.hashing;
 import thBase.allocator;
 import thBase.io;
 import thBase.algorithm;
+import thBase.timer;
 
 import std.math;
 import core.stdc.math;
+
+version = UseOctree;
 
 class Scene
 {
@@ -24,12 +29,31 @@ class Scene
   static struct Node
   {
     Sphere sphere;
+    bool same;
     union {
       Node*[2] childs;
       struct {
         void* dummy;
         Triangle* triangle;
       }
+    }
+  }
+
+  static struct NodeOctreePolicy
+  {
+    static vec3 getPosition(Node* obj)
+    {
+      return obj.sphere.pos;
+    }
+
+    static AlignedBoxLocal getBoundingBox(Node* obj)
+    {
+      return AlignedBoxLocal(obj.sphere);
+    }
+
+    static bool hasMoved(Node* obj)
+    {
+      return false;
     }
   }
 
@@ -54,11 +78,35 @@ class Scene
 
     loader.LoadFile(rcstring(path), Flags(ModelLoader.Load.Everything));
 
-    size_t totalNumFaces = 0;
-    foreach(ref mesh; loader.modelData.meshes)
+    auto leafs = New!(Vector!(const(ModelLoader.NodeDrawData)*))();
+    leafs.reserve(16);
+    scope(exit) Delete(leafs);
+
+    void findLeafs(const(ModelLoader.NodeDrawData*) node)
     {
-      totalNumFaces += mesh.faces.length;
+      if(node.meshes.length > 0)
+      {
+        leafs ~= node;
+      }
+      foreach(child; node.children)
+      {
+        findLeafs(child);
+      }
     }
+
+    findLeafs(loader.modelData.rootNode);
+    assert(leafs.length > 0, "no leaf nodes found");
+
+    size_t totalNumFaces = 0;
+    foreach(leaf; leafs)
+    {
+      foreach(meshIndex; leaf.meshes)
+      {
+        auto mesh = &loader.modelData.meshes[meshIndex];
+        totalNumFaces += mesh.faces.length;
+      }
+    }
+    writefln("Scene has %d triangles", totalNumFaces);
 
     m_materials = NewArray!Material(loader.modelData.materials.length);
     foreach(size_t i, ref material; m_materials)
@@ -69,36 +117,9 @@ class Scene
 		m_triangles = NewArray!Triangle(totalNumFaces);
     m_data = NewArray!TriangleData(totalNumFaces);
     size_t currentFaceCount = 0;
-    foreach(ref mesh; loader.modelData.meshes)
+    foreach(leaf; leafs)
     {
-      auto triangles = m_triangles[currentFaceCount..(currentFaceCount+mesh.faces.length)];
-      auto data = m_data[currentFaceCount..(currentFaceCount+mesh.faces.length)];
-
-      auto vertices = AllocatorNewArray!vec3(ThreadLocalStackAllocator.globalInstance, mesh.vertices.length);
-      scope(exit) AllocatorDelete(ThreadLocalStackAllocator.globalInstance, vertices);
-
-      auto normals = AllocatorNewArray!vec3(ThreadLocalStackAllocator.globalInstance, mesh.normals.length);
-      scope(exit) AllocatorDelete(ThreadLocalStackAllocator.globalInstance, normals);
-
-      const(ModelLoader.NodeDrawData*) findLeaf(const(ModelLoader.NodeDrawData*) node)
-      {
-        if(node.meshes.length > 0)
-        {
-          return node;
-        }
-        foreach(child; node.children)
-        {
-          auto result = findLeaf(child);
-          if(result !is null)
-          {
-            return result;
-          }
-        }
-        return null;
-      }
-
-      const(ModelLoader.NodeDrawData)* curNode = findLeaf(loader.modelData.rootNode);
-      assert(curNode !is null, "no node with mesh found");
+      auto curNode = leaf;
       mat4 transform = mat4.Identity().Right2Left();
       transform = loader.modelData.rootNode.transform * transform;
       while(curNode !is null && curNode != loader.modelData.rootNode)
@@ -109,50 +130,63 @@ class Scene
 
       mat3 normalMatrix = transform.NormalMatrix();
 
-      auto minBounds = vec3(float.max, float.max, float.max);
-      auto maxBounds = vec3(-float.max, -float.max, -float.max);
-      auto boundingRadius = 0.0f;
-
-      foreach(size_t i, ref vertex; vertices)
+      foreach(meshIndex; leaf.meshes)
       {
-        vertex = transform * mesh.vertices[i];
-        minBounds = minimum(minBounds, vertex);
-        maxBounds = maximum(maxBounds, vertex);
-        boundingRadius = max(boundingRadius, vertex.length);
-      }
-      logInfo("%s => minBounds %s, maxBounds %s", path, minBounds.f[], maxBounds.f[]);
+        auto mesh = &loader.modelData.meshes[meshIndex];
+        auto triangles = m_triangles[currentFaceCount..(currentFaceCount+mesh.faces.length)];
+        auto data = m_data[currentFaceCount..(currentFaceCount+mesh.faces.length)];
 
-      foreach(size_t i, ref normal; normals)
-      {
-        normal = normalMatrix * mesh.normals[i];
-      }
+        auto vertices = AllocatorNewArray!vec3(ThreadLocalStackAllocator.globalInstance, mesh.vertices.length);
+        scope(exit) AllocatorDelete(ThreadLocalStackAllocator.globalInstance, vertices);
 
-		  foreach(size_t i,ref face; triangles)
-      {			
-			  face.v0 = vertices[mesh.faces[i].indices[0]];
-        face.v1 = vertices[mesh.faces[i].indices[1]];
-        face.v2 = vertices[mesh.faces[i].indices[2]];
-        face.plane = Plane(face.v0, face.v1, face.v2);
-		  }
+        auto normals = AllocatorNewArray!vec3(ThreadLocalStackAllocator.globalInstance, mesh.normals.length);
+        scope(exit) AllocatorDelete(ThreadLocalStackAllocator.globalInstance, normals);
 
-      foreach(size_t i, ref d; data)
-      {
-        d.n0 = normals[mesh.faces[i].indices[0]];
-        d.n1 = normals[mesh.faces[i].indices[1]];
-        d.n2 = normals[mesh.faces[i].indices[2]];
-        d.material = &m_materials[mesh.materialIndex];
+        auto minBounds = vec3(float.max, float.max, float.max);
+        auto maxBounds = vec3(-float.max, -float.max, -float.max);
+        auto boundingRadius = 0.0f;
 
-        auto up = triangles[i].plane.normal;
-        auto dir = vec3(1,0,0);
-        if(abs(dir.dot(up)) > 0.9f)
+        foreach(size_t i, ref vertex; vertices)
         {
-          dir = vec3(0,1,0);
+          vertex = transform * mesh.vertices[i];
+          minBounds = minimum(minBounds, vertex);
+          maxBounds = maximum(maxBounds, vertex);
+          boundingRadius = max(boundingRadius, vertex.length);
         }
-        auto right = up.cross(dir).normalize();
-        dir = up.cross(right).normalize();
-        d.localToWorld = mat3(dir, right, up);
+        logInfo("%s => minBounds %s, maxBounds %s", path, minBounds.f[], maxBounds.f[]);
+
+        foreach(size_t i, ref normal; normals)
+        {
+          normal = normalMatrix * mesh.normals[i];
+        }
+
+		    foreach(size_t i,ref face; triangles)
+        {			
+			    face.v0 = vertices[mesh.faces[i].indices[0]];
+          face.v1 = vertices[mesh.faces[i].indices[1]];
+          face.v2 = vertices[mesh.faces[i].indices[2]];
+          face.plane = Plane(face.v0, face.v1, face.v2);
+		    }
+
+        foreach(size_t i, ref d; data)
+        {
+          d.n0 = normals[mesh.faces[i].indices[0]];
+          d.n1 = normals[mesh.faces[i].indices[1]];
+          d.n2 = normals[mesh.faces[i].indices[2]];
+          d.material = &m_materials[mesh.materialIndex];
+
+          auto up = triangles[i].plane.normal;
+          auto dir = vec3(1,0,0);
+          if(abs(dir.dot(up)) > 0.9f)
+          {
+            dir = vec3(0,1,0);
+          }
+          auto right = up.cross(dir).normalize();
+          dir = up.cross(right).normalize();
+          d.localToWorld = mat3(dir, right, up);
+        }
+        currentFaceCount += mesh.faces.length;
       }
-      currentFaceCount += mesh.faces.length;
     }
 
     /*uint nodesNeeded = 0;
@@ -166,6 +200,109 @@ class Scene
     auto remainingNodes = ThreadLocalStackAllocator.globalInstance.AllocatorNew!(Vector!(Node*))();
     scope(exit) ThreadLocalStackAllocator.globalInstance.AllocatorDelete(remainingNodes);
 
+    auto timer = cast(shared(Timer))New!Timer();
+    scope(exit) Delete(timer);
+
+    auto startTime = Zeitpunkt(timer);
+
+    //insert all inital nodes into the octree
+    version(UseOctree)
+    {
+    alias LooseOctree!(Node*, NodeOctreePolicy, PointerHashPolicy, TakeOwnership.no) Octree;
+    auto octree = New!Octree(100.0f, 10.0f);
+    scope(exit) Delete(octree);
+    foreach(size_t i, ref triangle; m_triangles)
+    {
+      Node *node = &m_nodes[i];
+      auto centerPoint = (triangle.v0 + triangle.v1 + triangle.v2) / 3.0f;      
+      node.sphere.pos = centerPoint;
+      node.sphere.radiusSquared = max(
+                                      max((triangle.v0 - centerPoint).squaredLength, 
+                                          (triangle.v1 - centerPoint).squaredLength),
+                                      (triangle.v2 - centerPoint).squaredLength) + 0.01f;
+      assert(node.sphere.radiusSquared > 0.0f);
+      node.dummy = null; //this means it is a leaf node
+      node.triangle = &triangle;
+      octree.insert(node);
+    }
+    octree.optimize();
+
+    Node* mergeNode(Node* nodeA, Node* nodeB)
+    {
+      if(nodeA is null && nodeB is null)
+        return null;
+      if(nodeA is null)
+        return nodeB;
+      if(nodeB is null)
+        return nodeA;
+
+      Node* newNode = &m_nodes[nextNode++];
+      if(nodeA.sphere in nodeB.sphere)
+      {
+        newNode.sphere = nodeB.sphere;
+        newNode.same = true;
+      }
+      else if(nodeB.sphere in nodeA.sphere)
+      {
+        newNode.sphere = nodeA.sphere;
+        newNode.same = true;
+      }
+      else
+      {
+        newNode.same = false;
+        float radiusA = nodeA.sphere.radius;
+        float radiusB = nodeB.sphere.radius;
+        vec3 rayThroughSpheres = nodeB.sphere.pos - nodeA.sphere.pos;
+        float dist = rayThroughSpheres.length;
+        rayThroughSpheres = rayThroughSpheres.normalize();
+        newNode.sphere.pos = ((nodeA.sphere.pos - (rayThroughSpheres * radiusA)) + (nodeB.sphere.pos + (rayThroughSpheres * radiusB))) * 0.5f;
+        float newRadius = (radiusA + dist + radiusB) * 0.5f + 0.01f;
+        newNode.sphere.radiusSquared = newRadius * newRadius;
+      }
+      newNode.childs[0] = nodeA;
+      newNode.childs[1] = nodeB;
+      assert(nodeA.sphere in newNode.sphere);
+      assert(nodeB.sphere in newNode.sphere);
+      return newNode;
+    }
+
+    Node* makeNode(Octree.Node octreeNode)
+    {
+      auto childs = octreeNode.childs;
+      Node* result1 = null;
+      if(childs.length > 0)
+      {
+        result1 = mergeNode(
+          mergeNode(
+            mergeNode(makeNode(childs[0]), makeNode(childs[1])),
+            mergeNode(makeNode(childs[2]), makeNode(childs[3]))
+          ),
+          mergeNode(
+            mergeNode(makeNode(childs[4]), makeNode(childs[5])),
+            mergeNode(makeNode(childs[6]), makeNode(childs[7]))
+          )
+        );
+      }
+
+      Node* result2 = null;
+      auto r = octreeNode.objects;
+      if(!r.empty)
+      {
+        result2 = r.front;
+        r.popFront();
+        while(!r.empty)
+        {
+          result2 = mergeNode(result2, r.front);
+          r.popFront();
+        }
+      }
+
+      return mergeNode(result1, result2);
+    }
+    m_rootNode = makeNode(octree.rootNode);
+    }
+    else
+    {
     //fill the inital nodes
     remainingNodes.resize(m_triangles.length);
     foreach(size_t i, ref triangle; m_triangles)
@@ -174,6 +311,7 @@ class Scene
       remainingNodes[i] = node;
       auto centerPoint = (triangle.v0 + triangle.v1 + triangle.v2) / 3.0f;      
       node.sphere.pos = centerPoint;
+      node.same = false;
       node.sphere.radiusSquared = max(
                                       max((triangle.v0 - centerPoint).squaredLength, 
                                           (triangle.v1 - centerPoint).squaredLength),
@@ -217,13 +355,16 @@ class Scene
       if(nodeA.sphere in nodeB.sphere)
       {
         newNode.sphere = nodeB.sphere;
+        newNode.same = true;
       }
       else if(nodeB.sphere in nodeA.sphere)
       {
         newNode.sphere = nodeA.sphere;
+        newNode.same = true;
       }
       else
       {
+        newNode.same = false;
         float radiusA = nodeA.sphere.radius;
         float radiusB = nodeB.sphere.radius;
         vec3 rayThroughSpheres = (nodeB.sphere.pos - nodeA.sphere.pos).normalize();
@@ -245,13 +386,16 @@ class Scene
       if(nodeToMerge >= remainingNodes.length)
         nodeToMerge = 0;
 
-      if(remainingNodes.length < m_triangles.length - (progress * percent))
+      /*if(remainingNodes.length < m_triangles.length - (progress * percent))
       {
         writefln("building tree %d%% done", progress++);
-      }
+      }*/
     }
     assert(remainingNodes.length == 1);
     m_rootNode = remainingNodes[0];
+    }
+
+    auto endTime = Zeitpunkt(timer);
 
     static void countDepth(Node* node, size_t depth, ref size_t minDepth, ref size_t maxDepth, ref float sumRadius, ref float numRadii)
     {
@@ -275,6 +419,7 @@ class Scene
     float sumRadius = 0.0f;
     countDepth(m_rootNode, 0, minDepth, maxDepth, sumRadius, numRadii);
     writefln("min-depth: %d, max-depth: %d, average-radius: %f", minDepth, maxDepth, sumRadius / numRadii);
+    writefln("Building tree took %f seconds", (endTime - startTime) / 1000.0f);
   }
 
   ~this()
@@ -287,7 +432,7 @@ class Scene
 
   private bool traceHelper(const(Node*) node, ref const(Ray) ray, ref float rayPos, ref vec3 normal, ref const(TriangleData)* data) const
   {
-    if(node.sphere.intersects(ray))
+    if(node.same || node.sphere.intersects(ray))
     {
       /*if(depth == 8)
       {
