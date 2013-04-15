@@ -230,34 +230,140 @@ class Scene
       if(nodeB is null)
         return nodeA;
 
-      Node* newNode = &m_nodes[nextNode++];
+      Node* newNode = null;
+
+      Node* mergeHelper(Node* nodeA, Node* nodeB)
+      {
+        if(newNode is null)
+        {
+          newNode = &m_nodes[nextNode++];
+          float radiusA = nodeA.sphere.radius;
+          float radiusB = nodeB.sphere.radius;
+          vec3 rayThroughSpheres = nodeB.sphere.pos - nodeA.sphere.pos;
+          float dist = rayThroughSpheres.length;
+          rayThroughSpheres = rayThroughSpheres.normalize();
+          newNode.sphere.pos = ((nodeA.sphere.pos - (rayThroughSpheres * radiusA)) + (nodeB.sphere.pos + (rayThroughSpheres * radiusB))) * 0.5f;
+          float newRadius = (radiusA + dist + radiusB) * 0.5f + 0.01f;
+          newNode.sphere.radiusSquared = newRadius * newRadius;
+        }
+        newNode.childs[0] = nodeA;
+        newNode.childs[1] = nodeB;
+        newNode.same = false;
+        assert(nodeA.sphere in newNode.sphere);
+        assert(nodeB.sphere in newNode.sphere);
+        return newNode;
+      }
+
+      static uint nodeDepth(Node* node, uint depth)
+      {
+        if(node.dummy is null)
+          return depth;
+        return max(nodeDepth(node.childs[0], depth+1),
+                   nodeDepth(node.childs[1], depth+1));
+      }
+
+      Node* insertInto(Node* nodeToInsert, Node* boundingNode)
+      {
+        Node* currentNode = boundingNode;
+        while(true)
+        {
+          if(currentNode.childs[0].dummy !is null && nodeToInsert.sphere in currentNode.childs[0].sphere)
+          {
+            currentNode = currentNode.childs[0];
+            continue;
+          }
+          if(currentNode.childs[1].dummy !is null && nodeToInsert.sphere in currentNode.childs[1].sphere)
+          {
+            currentNode = currentNode.childs[1];
+            continue;
+          }
+          break;
+        }
+
+        if(nodeDepth(currentNode.childs[0], 0) < nodeDepth(currentNode.childs[1], 0))
+        {
+          currentNode.childs[0] = mergeHelper(currentNode.childs[0], nodeToInsert);
+        }
+        else
+        {
+          currentNode.childs[1] = mergeHelper(currentNode.childs[1], nodeToInsert);
+        }
+        return boundingNode;
+      }
+
       if(nodeA.sphere in nodeB.sphere)
       {
-        newNode.sphere = nodeB.sphere;
-        nodeB.same = true;
+        if(nodeB.dummy is null)
+        {
+          newNode = &m_nodes[nextNode++];
+          newNode.sphere = nodeB.sphere;
+          nodeB.same = true;
+        }
+        else
+        {
+          //return nodeA.insertInto(nodeB);
+          return insertInto(nodeA, nodeB);
+        }
       }
       else if(nodeB.sphere in nodeA.sphere)
       {
-        newNode.sphere = nodeA.sphere;
-        nodeA.same = true;
+        if(nodeA.dummy is null)
+        {
+          newNode = &m_nodes[nextNode++];
+          newNode.sphere = nodeA.sphere;
+          nodeA.same = true;
+        }
+        else
+        {
+          //return nodeB.insertInto(nodeA);
+          return insertInto(nodeB, nodeA);
+        }
       }
-      else
+      
+      return mergeHelper(nodeA, nodeB);
+    }
+
+    Node* bruteForceMerge(Vector!(Node*) nodesToMerge)
+    {
+      //merge the nodes until there is only 1 node left
+      size_t nodeToMerge = 0;
+      while(nodesToMerge.length > 1)
       {
-        float radiusA = nodeA.sphere.radius;
-        float radiusB = nodeB.sphere.radius;
-        vec3 rayThroughSpheres = nodeB.sphere.pos - nodeA.sphere.pos;
-        float dist = rayThroughSpheres.length;
-        rayThroughSpheres = rayThroughSpheres.normalize();
-        newNode.sphere.pos = ((nodeA.sphere.pos - (rayThroughSpheres * radiusA)) + (nodeB.sphere.pos + (rayThroughSpheres * radiusB))) * 0.5f;
-        float newRadius = (radiusA + dist + radiusB) * 0.5f + 0.01f;
-        newNode.sphere.radiusSquared = newRadius * newRadius;
+        Node* nodeA = nodesToMerge[nodeToMerge];
+        auto centerPoint = nodeA.sphere.pos;
+
+        //size_t smallestIndex = nodeToMerge + 1;
+        size_t smallestIndex = (nodeToMerge) == 0 ? 1 : 0;
+        float currentMinDistance = (nodesToMerge[smallestIndex].sphere.pos - centerPoint).squaredLength;
+
+        //foreach(size_t i, nodeB; nodesToMerge[nodeToMerge+2..nodesToMerge.length])
+        foreach(size_t i, nodeB; nodesToMerge.toArray())
+        {
+          if(i == nodeToMerge)
+            continue;
+          float dist = (nodeB.sphere.pos - centerPoint).squaredLength;
+          if(dist < currentMinDistance)
+          {
+            currentMinDistance = dist;
+            //smallestIndex = i + 2 + nodeToMerge;
+            smallestIndex = i;
+          }
+        }
+
+        Node* nodeB = nodesToMerge[smallestIndex];
+        assert(nodeA !is nodeB);
+
+        assert(nodeToMerge != smallestIndex);
+        nodesToMerge[nodeToMerge] = mergeNode(nodeA, nodeB);
+        nodesToMerge.removeAtIndexUnordered(smallestIndex);
+
+        nodeToMerge++;
+        //if(nodeToMerge >= nodesToMerge.length - 1)
+        if(nodeToMerge >= nodesToMerge.length)
+          nodeToMerge = 0;
       }
-      newNode.childs[0] = nodeA;
-      newNode.childs[1] = nodeB;
-      newNode.same = false;
-      assert(nodeA.sphere in newNode.sphere);
-      assert(nodeB.sphere in newNode.sphere);
-      return newNode;
+      assert(nodesToMerge.length == 1);
+      return nodesToMerge[0];
     }
 
 
@@ -334,11 +440,13 @@ class Scene
         {
           result2 = r.front;
           r.popFront();
+          remainingNodes.resize(0);
           while(!r.empty)
           {
-            result2 = mergeNode(result2, r.front);
+            remainingNodes ~= (r.front());
             r.popFront();
           }
+          result2 = bruteForceMerge(remainingNodes);
         }
 
         return mergeNode(result1, result2);
@@ -347,96 +455,24 @@ class Scene
     }
     else
     {
-    //fill the inital nodes
-    remainingNodes.resize(m_triangles.length);
-    foreach(size_t i, ref triangle; m_triangles)
-    {
-      Node *node = &m_nodes[i];
-      remainingNodes[i] = node;
-      auto centerPoint = (triangle.v0 + triangle.v1 + triangle.v2) / 3.0f;      
-      node.sphere.pos = centerPoint;
-      node.same = false;
-      node.sphere.radiusSquared = max(
-                                      max((triangle.v0 - centerPoint).squaredLength, 
-                                          (triangle.v1 - centerPoint).squaredLength),
-                                      (triangle.v2 - centerPoint).squaredLength) + 0.01f;
-      assert(node.sphere.radiusSquared > 0.0f);
-      node.dummy = null; //this means it is a leaf node
-      node.triangle = &triangle;
-    }
-
-    //merge the nodes until there is only 1 node left
-    size_t nodeToMerge = 0;
-    auto percent = m_triangles.length / 100;
-    uint progress = 1;
-    while(remainingNodes.length > 1)
-    {
-      Node* nodeA = remainingNodes[nodeToMerge];
-      auto centerPoint = nodeA.sphere.pos;
-
-      //size_t smallestIndex = nodeToMerge + 1;
-      size_t smallestIndex = (nodeToMerge) == 0 ? 1 : 0;
-      float currentMinDistance = (remainingNodes[smallestIndex].sphere.pos - centerPoint).squaredLength;
-
-      //foreach(size_t i, nodeB; remainingNodes[nodeToMerge+2..remainingNodes.length])
-      foreach(size_t i, nodeB; remainingNodes.toArray())
+      //fill the inital nodes
+      remainingNodes.resize(m_triangles.length);
+      foreach(size_t i, ref triangle; m_triangles)
       {
-        if(i == nodeToMerge)
-          continue;
-        float dist = (nodeB.sphere.pos - centerPoint).squaredLength;
-        if(dist < currentMinDistance)
-        {
-          currentMinDistance = dist;
-          //smallestIndex = i + 2 + nodeToMerge;
-          smallestIndex = i;
-        }
+        Node *node = &m_nodes[i];
+        remainingNodes[i] = node;
+        auto centerPoint = (triangle.v0 + triangle.v1 + triangle.v2) / 3.0f;      
+        node.sphere.pos = centerPoint;
+        node.same = false;
+        node.sphere.radiusSquared = max(
+                                        max((triangle.v0 - centerPoint).squaredLength, 
+                                            (triangle.v1 - centerPoint).squaredLength),
+                                        (triangle.v2 - centerPoint).squaredLength) + 0.01f;
+        assert(node.sphere.radiusSquared > 0.0f);
+        node.dummy = null; //this means it is a leaf node
+        node.triangle = &triangle;
       }
-
-      Node* nodeB = remainingNodes[smallestIndex];
-      assert(nodeA !is nodeB);
-
-      Node* newNode = &m_nodes[nextNode++];
-      if(nodeA.sphere in nodeB.sphere)
-      {
-        newNode.sphere = nodeB.sphere;
-        newNode.same = true;
-      }
-      else if(nodeB.sphere in nodeA.sphere)
-      {
-        newNode.sphere = nodeA.sphere;
-        newNode.same = true;
-      }
-      else
-      {
-        newNode.same = false;
-        float radiusA = nodeA.sphere.radius;
-        float radiusB = nodeB.sphere.radius;
-        vec3 rayThroughSpheres = (nodeB.sphere.pos - nodeA.sphere.pos).normalize();
-        newNode.sphere.pos = ((nodeA.sphere.pos - (rayThroughSpheres * radiusA)) + (nodeB.sphere.pos + (rayThroughSpheres * radiusB))) * 0.5f;
-        float newRadius = (radiusA + sqrtf(currentMinDistance) + radiusB) * 0.5f + 0.01f;
-        newNode.sphere.radiusSquared = newRadius * newRadius;
-      }
-      newNode.childs[0] = nodeA;
-      newNode.childs[1] = nodeB;
-      assert(nodeA.sphere in newNode.sphere);
-      assert(nodeB.sphere in newNode.sphere);
-
-      assert(nodeToMerge != smallestIndex);
-      remainingNodes[nodeToMerge] = newNode;
-      remainingNodes.removeAtIndexUnordered(smallestIndex);
-
-      nodeToMerge++;
-      //if(nodeToMerge >= remainingNodes.length - 1)
-      if(nodeToMerge >= remainingNodes.length)
-        nodeToMerge = 0;
-
-      /*if(remainingNodes.length < m_triangles.length - (progress * percent))
-      {
-        writefln("building tree %d%% done", progress++);
-      }*/
-    }
-    assert(remainingNodes.length == 1);
-    m_rootNode = remainingNodes[0];
+      m_rootNode = bruteForceMerge(remainingNodes);
     }
 
     auto endTime = Zeitpunkt(timer);
