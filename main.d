@@ -251,7 +251,7 @@ int main(string[] argv)
       if(progress >= steps)
         progress = 0;
     }
-    else if(progress < 1)
+    else //if(progress < 1)
     // task based rendering
     {
       if(taskIdentifier.allFinished)
@@ -267,7 +267,7 @@ int main(string[] argv)
       }
       g_localTaskQueue.executeOneTask();      
     }
-    else
+    /*else
     {
       if(taskIdentifier.allFinished)
       {
@@ -278,7 +278,7 @@ int main(string[] argv)
       {
         g_localTaskQueue.executeOneTask();  
       }
-    }
+    }*/
 
     while(SDL.PollEvent(&event)) 
     {      

@@ -16,7 +16,7 @@ __gshared Camera g_camera;
 __gshared Scene g_scene;
 __gshared uint g_width = 320;
 __gshared uint g_height = 240;
-__gshared uint g_numThreads = 8;
+__gshared uint g_numThreads = 1;
 
 // Holds all information for a single pixel visible on the screen
 struct Pixel
@@ -47,12 +47,12 @@ void loadScene()
 {
   g_camera = New!Camera(30.0f, cast(float)g_height / cast(float)g_width);
   
-  /*g_camera.setTransform(vec3(25, 10, 20), vec3(0, 0, 0), vec3(0, 0, 1));
-  g_scene = New!Scene("teapot.thModel", &fillMaterial);*/
+  g_camera.setTransform(vec3(25, 10, 20), vec3(0, 0, 0), vec3(0, 0, 1));
+  g_scene = New!Scene("teapot.thModel", &fillMaterial);
 
   
-  g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
-  g_scene = New!Scene("cornell-box.thModel", &fillMaterial);
+  /*g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
+  g_scene = New!Scene("cornell-box.thModel", &fillMaterial);*/
 
   /*g_camera.setTransform(vec3(-1, 0, 7), vec3(0, 0, 7), vec3(0, 0, 1));
   g_scene = New!Scene("sponza2.thModel", &fillMaterial);*/

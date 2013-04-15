@@ -21,6 +21,7 @@ import std.math;
 import core.stdc.math;
 
 version = UseOctree;
+//version = UseTopDown;
 
 class Scene
 {
@@ -116,6 +117,9 @@ class Scene
 
 		m_triangles = NewArray!Triangle(totalNumFaces);
     m_data = NewArray!TriangleData(totalNumFaces);
+    auto minBounds = vec3(float.max, float.max, float.max);
+    auto maxBounds = vec3(-float.max, -float.max, -float.max);
+    auto boundingRadius = 0.0f;
     size_t currentFaceCount = 0;
     foreach(leaf; leafs)
     {
@@ -142,10 +146,6 @@ class Scene
         auto normals = AllocatorNewArray!vec3(ThreadLocalStackAllocator.globalInstance, mesh.normals.length);
         scope(exit) AllocatorDelete(ThreadLocalStackAllocator.globalInstance, normals);
 
-        auto minBounds = vec3(float.max, float.max, float.max);
-        auto maxBounds = vec3(-float.max, -float.max, -float.max);
-        auto boundingRadius = 0.0f;
-
         foreach(size_t i, ref vertex; vertices)
         {
           vertex = transform * mesh.vertices[i];
@@ -153,7 +153,6 @@ class Scene
           maxBounds = maximum(maxBounds, vertex);
           boundingRadius = max(boundingRadius, vertex.length);
         }
-        logInfo("%s => minBounds %s, maxBounds %s", path, minBounds.f[], maxBounds.f[]);
 
         foreach(size_t i, ref normal; normals)
         {
@@ -188,6 +187,7 @@ class Scene
         currentFaceCount += mesh.faces.length;
       }
     }
+    writefln("minBounds %s, maxBounds %s, boudingRadius %f", minBounds.f[], maxBounds.f[], boundingRadius);
 
     /*uint nodesNeeded = 0;
     for(uint i=2; nodesNeeded < m_triangles.length; i*=2)
@@ -205,17 +205,12 @@ class Scene
 
     auto startTime = Zeitpunkt(timer);
 
-    //insert all inital nodes into the octree
-    version(UseOctree)
+    Node* nodeFromTriangle(ref Triangle triangle)
     {
-    alias LooseOctree!(Node*, NodeOctreePolicy, PointerHashPolicy, TakeOwnership.no) Octree;
-    auto octree = New!Octree(100.0f, 10.0f);
-    scope(exit) Delete(octree);
-    foreach(size_t i, ref triangle; m_triangles)
-    {
-      Node *node = &m_nodes[i];
+      Node *node = &m_nodes[nextNode++];
       auto centerPoint = (triangle.v0 + triangle.v1 + triangle.v2) / 3.0f;      
       node.sphere.pos = centerPoint;
+      node.same = false;
       node.sphere.radiusSquared = max(
                                       max((triangle.v0 - centerPoint).squaredLength, 
                                           (triangle.v1 - centerPoint).squaredLength),
@@ -223,9 +218,8 @@ class Scene
       assert(node.sphere.radiusSquared > 0.0f);
       node.dummy = null; //this means it is a leaf node
       node.triangle = &triangle;
-      octree.insert(node);
+      return node;
     }
-    octree.optimize();
 
     Node* mergeNode(Node* nodeA, Node* nodeB)
     {
@@ -240,16 +234,15 @@ class Scene
       if(nodeA.sphere in nodeB.sphere)
       {
         newNode.sphere = nodeB.sphere;
-        newNode.same = true;
+        nodeB.same = true;
       }
       else if(nodeB.sphere in nodeA.sphere)
       {
         newNode.sphere = nodeA.sphere;
-        newNode.same = true;
+        nodeA.same = true;
       }
       else
       {
-        newNode.same = false;
         float radiusA = nodeA.sphere.radius;
         float radiusB = nodeB.sphere.radius;
         vec3 rayThroughSpheres = nodeB.sphere.pos - nodeA.sphere.pos;
@@ -261,45 +254,96 @@ class Scene
       }
       newNode.childs[0] = nodeA;
       newNode.childs[1] = nodeB;
+      newNode.same = false;
       assert(nodeA.sphere in newNode.sphere);
       assert(nodeB.sphere in newNode.sphere);
       return newNode;
     }
 
-    Node* makeNode(Octree.Node octreeNode)
-    {
-      auto childs = octreeNode.childs;
-      Node* result1 = null;
-      if(childs.length > 0)
-      {
-        result1 = mergeNode(
-          mergeNode(
-            mergeNode(makeNode(childs[0]), makeNode(childs[1])),
-            mergeNode(makeNode(childs[2]), makeNode(childs[3]))
-          ),
-          mergeNode(
-            mergeNode(makeNode(childs[4]), makeNode(childs[5])),
-            mergeNode(makeNode(childs[6]), makeNode(childs[7]))
-          )
-        );
-      }
 
-      Node* result2 = null;
-      auto r = octreeNode.objects;
-      if(!r.empty)
+    //insert all inital nodes into the octree
+    version(UseTopDown)
+    {
+      m_rootNode = mergeNode(nodeFromTriangle(m_triangles[0]), nodeFromTriangle(m_triangles[1]));
+      foreach(ref triangle; m_triangles[2..$])
       {
-        result2 = r.front;
-        r.popFront();
-        while(!r.empty)
+        Node* newNode = nodeFromTriangle(triangle);
+        if(!(newNode.sphere in m_rootNode.sphere))
         {
-          result2 = mergeNode(result2, r.front);
-          r.popFront();
+          m_rootNode = mergeNode(newNode, m_rootNode);
+        }
+        else
+        {
+          Node* insertInto = m_rootNode;
+          while(true)
+          {
+            if(newNode.dummy is null)
+              break;
+            if(!(newNode.sphere in insertInto.childs[0]))
+            {
+            }
+          }
         }
       }
-
-      return mergeNode(result1, result2);
     }
-    m_rootNode = makeNode(octree.rootNode);
+    else version(UseOctree)
+    {
+      alias LooseOctree!(Node*, NodeOctreePolicy, PointerHashPolicy, TakeOwnership.no) Octree;
+      auto octree = New!Octree(boundingRadius * 2.0f, 0.1f);
+      scope(exit) Delete(octree);
+      foreach(size_t i, ref triangle; m_triangles)
+      {
+        Node *node = &m_nodes[i];
+        auto centerPoint = (triangle.v0 + triangle.v1 + triangle.v2) / 3.0f;      
+        node.sphere.pos = centerPoint;
+        node.sphere.radiusSquared = max(
+                                        max((triangle.v0 - centerPoint).squaredLength, 
+                                            (triangle.v1 - centerPoint).squaredLength),
+                                        (triangle.v2 - centerPoint).squaredLength) + 0.01f;
+        assert(node.sphere.radiusSquared > 0.0f);
+        node.dummy = null; //this means it is a leaf node
+        node.triangle = &triangle;
+        octree.insert(node);
+      }
+      octree.optimize();
+
+      auto stats = octree.ComputeStatistics();
+      writefln("Octree minDepth %d, maxDepth %d, maxTriangles %d", stats.minDepth, stats.maxDepth, stats.maxNumObjects);
+
+      Node* makeNode(Octree.Node octreeNode)
+      {
+        auto childs = octreeNode.childs;
+        Node* result1 = null;
+        if(childs.length > 0)
+        {
+          result1 = mergeNode(
+            mergeNode(
+              mergeNode(makeNode(childs[0]), makeNode(childs[1])),
+              mergeNode(makeNode(childs[2]), makeNode(childs[3]))
+            ),
+            mergeNode(
+              mergeNode(makeNode(childs[4]), makeNode(childs[5])),
+              mergeNode(makeNode(childs[6]), makeNode(childs[7]))
+            )
+          );
+        }
+
+        Node* result2 = null;
+        auto r = octreeNode.objects;
+        if(!r.empty)
+        {
+          result2 = r.front;
+          r.popFront();
+          while(!r.empty)
+          {
+            result2 = mergeNode(result2, r.front);
+            r.popFront();
+          }
+        }
+
+        return mergeNode(result1, result2);
+      }
+      m_rootNode = makeNode(octree.rootNode);
     }
     else
     {
