@@ -50,12 +50,13 @@ void loadScene()
   /*g_camera.setTransform(vec3(25, 10, 20), vec3(0, 0, 0), vec3(0, 0, 1));
   g_scene = New!Scene("teapot.thModel", &fillMaterial);*/
 
-  g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
-  g_scene = New!Scene("cornell-box.thModel", &fillMaterial);
+  /*g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
+  g_scene = New!Scene("cornell-box.thModel", &fillMaterial);*/
 
-  g_camera.setTransform(vec3(-1, 0, 7), vec3(0, 0, 7), vec3(0, 0, 1));
-  g_scene = New!Scene("sponza2.thModel", &fillMaterial);
-  g_scene.saveTree("sponza2.tree");
+  g_camera.setTransform(vec3(-660, -350, 600), vec3(-658, -349, 599.8), vec3(0, 0, 1));
+  //g_camera.setTransform(vec3(0,0,0), vec3(0,0.1,1), vec3(0, 0, 1));
+  g_scene = New!Scene("sponza2.tree", &fillMaterial);
+  //g_scene.saveTree("sponza2.tree");
 
   /*g_camera.setTransform(vec3(3, 3, 3), vec3(0, 0, 0), vec3(0, 0, 1));
   g_scene = New!Scene("chest1.thModel";)*/
@@ -83,6 +84,12 @@ void fillMaterial(ref Material mat, const(char)[] materialName)
     mat.color.x = 0.0f;
     mat.color.y = 1.0f;
     mat.color.z = 0.0f;
+  }
+  else if(materialName == "Blue")
+  {
+    mat.color.x = 0.0f;
+    mat.color.y = 0.0f;
+    mat.color.z = 1.0f;
   }
 }
 
@@ -131,10 +138,10 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
     const(Scene.TriangleData)* data;
     if( g_scene.trace(viewRay, rayPos, normal, data))
     {
-      /+vec3 hitPos = viewRay.get(rayPos);
+      vec3 hitPos = viewRay.get(rayPos);
 
       auto e = vec3(0.0f, 0.0f, 0.0f);
-      enum uint N = 9;
+      enum uint N = 3;
       //naive sampling
       for(uint i=0; i<N; i++)
       {
@@ -176,8 +183,8 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
 
       pixel.color.x = e.x;
       pixel.color.y = e.y;
-      pixel.color.z = e.z;+/
-      if(data.material.emessive > 0.0f)
+      pixel.color.z = e.z;
+      /*if(data.material.emessive > 0.0f)
       {
         pixel.color.x = pixel.color.y = pixel.color.z = 1.0f;
       }
@@ -187,7 +194,7 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
         pixel.color.x = data.material.color.x * NdotL;
         pixel.color.y = data.material.color.y * NdotL;
         pixel.color.z = data.material.color.z * NdotL;
-      }
+      }*/
       /*float NdotL = abs(normal.dot(-viewRay.dir));
       pixel.color.x = NdotL;
       pixel.color.y = NdotL;
@@ -195,8 +202,9 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
     }
     else
     {
-      pixel.color.x = pixel.color.z = 1.0f;
-      pixel.color.y = 0.0f;
+      //pixel.color.x = pixel.color.z = 1.0f;
+      //pixel.color.y = 0.0f;
+      pixel.color = sampleSky(viewRay.dir);
     }
   }                          
 }
@@ -215,6 +223,15 @@ vec3 angleToLocalDirection(float phi, float psi)
   float cosPhi = cosf(phi);
   auto result = vec3(cosf(psi) * cosPhi, sinf(psi) * cosPhi, sinf(phi));
   return result;
+}
+
+vec3 sampleSky(vec3 dir)
+{
+  auto sunDir = vec3(1, 1, 6).normalize();
+  float dot = sunDir.dot(dir);
+  if(dot > 0.997f)
+    return vec3(1.0f, 0.984f, 0.8f) * 20.0f;
+  return vec3(0.682f, 0.977f, 1.0f);
 }
 
 vec3 evalRenderingEquation(ref const(vec3) dir, ref const(vec3) pos, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
@@ -250,5 +267,5 @@ vec3 evalRenderingEquation(ref const(vec3) dir, ref const(vec3) pos, ref const(v
     return result;
   }
   //writefln("exit at depth %d", depth);
-  return data.material.emessive * data.material.color; 
+  return data.material.emessive * data.material.color + sampleSky(dir); 
 }
