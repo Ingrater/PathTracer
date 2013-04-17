@@ -23,7 +23,7 @@ import thBase.scoped;
 import std.math;
 import core.stdc.math;
 
-version = UseOctree;
+//version = UseOctree;
 //version = UseTopDown;
 
 class Scene
