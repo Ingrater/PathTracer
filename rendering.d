@@ -47,15 +47,16 @@ void loadScene()
 {
   g_camera = New!Camera(30.0f, cast(float)g_height / cast(float)g_width);
   
-  g_camera.setTransform(vec3(25, 10, 20), vec3(0, 0, 0), vec3(0, 0, 1));
-  g_scene = New!Scene("teapot.thModel", &fillMaterial);
+  /*g_camera.setTransform(vec3(25, 10, 20), vec3(0, 0, 0), vec3(0, 0, 1));
+  g_scene = New!Scene("teapot.thModel", &fillMaterial);*/
 
   
   /*g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
   g_scene = New!Scene("cornell-box.thModel", &fillMaterial);*/
 
-  /*g_camera.setTransform(vec3(-1, 0, 7), vec3(0, 0, 7), vec3(0, 0, 1));
-  g_scene = New!Scene("sponza2.thModel", &fillMaterial);*/
+  g_camera.setTransform(vec3(-1, 0, 7), vec3(0, 0, 7), vec3(0, 0, 1));
+  g_scene = New!Scene("sponza2.thModel", &fillMaterial);
+  g_scene.saveTree("sponza2.tree");
 
   /*g_camera.setTransform(vec3(3, 3, 3), vec3(0, 0, 0), vec3(0, 0, 1));
   g_scene = New!Scene("chest1.thModel";)*/
@@ -129,7 +130,7 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
     const(Scene.TriangleData)* data;
     if( g_scene.trace(viewRay, rayPos, normal, data))
     {
-      vec3 hitPos = viewRay.get(rayPos);
+      /+vec3 hitPos = viewRay.get(rayPos);
 
       auto e = vec3(0.0f, 0.0f, 0.0f);
       enum uint N = 9;
@@ -174,8 +175,8 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
 
       pixel.color.x = e.x;
       pixel.color.y = e.y;
-      pixel.color.z = e.z;
-      /*if(data.material.emessive > 0.0f)
+      pixel.color.z = e.z;+/
+      if(data.material.emessive > 0.0f)
       {
         pixel.color.x = pixel.color.y = pixel.color.z = 1.0f;
       }
@@ -185,7 +186,7 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
         pixel.color.x = data.material.color.x * NdotL;
         pixel.color.y = data.material.color.y * NdotL;
         pixel.color.z = data.material.color.z * NdotL;
-      }*/
+      }
       /*float NdotL = abs(normal.dot(-viewRay.dir));
       pixel.color.x = NdotL;
       pixel.color.y = NdotL;

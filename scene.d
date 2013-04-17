@@ -16,6 +16,9 @@ import thBase.allocator;
 import thBase.io;
 import thBase.algorithm;
 import thBase.timer;
+import thBase.casts;
+import thBase.chunkfile;
+import thBase.scoped;
 
 import std.math;
 import core.stdc.math;
@@ -236,6 +239,8 @@ class Scene
       {
         if(newNode is null)
         {
+          assert(nodeA.sphere !in nodeB.sphere, "nodeA is inside nodeB");
+          assert(nodeB.sphere !in nodeA.sphere, "nodeB is inside nodeA");
           newNode = &m_nodes[nextNode++];
           float radiusA = nodeA.sphere.radius;
           float radiusB = nodeB.sphere.radius;
@@ -282,11 +287,11 @@ class Scene
 
         if(nodeDepth(currentNode.childs[0], 0) < nodeDepth(currentNode.childs[1], 0))
         {
-          currentNode.childs[0] = mergeHelper(currentNode.childs[0], nodeToInsert);
+          currentNode.childs[0] = mergeNode(currentNode.childs[0], nodeToInsert);
         }
         else
         {
-          currentNode.childs[1] = mergeHelper(currentNode.childs[1], nodeToInsert);
+          currentNode.childs[1] = mergeNode(currentNode.childs[1], nodeToInsert);
         }
         return boundingNode;
       }
@@ -325,6 +330,8 @@ class Scene
 
     Node* bruteForceMerge(Vector!(Node*) nodesToMerge)
     {
+      if(nodesToMerge.length == 0)
+        return null;
       //merge the nodes until there is only 1 node left
       size_t nodeToMerge = 0;
       while(nodesToMerge.length > 1)
@@ -596,5 +603,84 @@ class Scene
   {
     assert(data > m_data.ptr, "not a valid data pointer");
     return cast(size_t)(data - m_data.ptr);
+  }
+
+  /**
+   * saves the internal tree structure to a file
+   */
+  void saveTree(const(char)[] filename)
+  {
+    auto outFile = scopedRef!Chunkfile(New!Chunkfile(rcstring(filename), Chunkfile.Operation.Write, Chunkfile.DebugMode.Off ));
+    outFile.startWriting("tree", 1);
+    scope(exit) outFile.endWriting();
+
+    outFile.write(int_cast!uint(m_materials.length));
+    outFile.write(int_cast!uint(m_triangles.length));
+    outFile.write(m_triangles);
+    foreach(ref data; m_data)
+    {
+      outFile.write(data.n0);
+      outFile.write(data.n1);
+      outFile.write(data.n2);
+      outFile.write(int_cast!uint(data.material - m_materials.ptr));
+      outFile.write(data.localToWorld);
+    }
+
+    outFile.write(int_cast!uint(m_nodes.length));
+    foreach(ref node; m_nodes)
+    {
+      outFile.write(node.sphere);
+      outFile.write(node.same);
+      if(node.dummy is null)
+      {
+        outFile.write(cast(int)-1);
+        if(node.triangle is null)
+          outFile.write(cast(int)-1);
+        else
+          outFile.write(int_cast!int(node.triangle - m_triangles.ptr));
+      }
+      else
+      {
+        outFile.write(int_cast!int(node.childs[0] - m_nodes.ptr));
+        outFile.write(int_cast!int(node.childs[1] - m_nodes.ptr));
+      }
+    }
+    outFile.write(int_cast!int(m_rootNode - m_nodes.ptr));
+  }
+
+  private void loadTree(const(char)[] filename, MaterialFunc matFunc)
+  {
+    auto file = scopedRef!(Chunkfile)(New!Chunkfile(rcstring(filename), Chunkfile.Operation.Read));
+    if(file.startReading("tree") != thResult.SUCCESS)
+    {
+      throw New!RCException(format("File '%s' is not a tree format", filename));
+    }
+
+    if(file.fileVersion == 1)
+    {
+      throw New!RCException(format("Tree '%s' does have old format, please reexport", filename));
+    }
+
+    uint numMaterials;
+    file.read(numMaterials);
+    m_materials = NewArray!Material(numMaterials);
+    foreach(ref mat; m_materials)
+      matFunc(
+
+    uint numTriangles;
+    file.read(numTriangles);
+    m_triangles = NewArray!Triangle(numTriangles);
+    file.read(m_triangles);
+
+    m_data = NewArray!TriangleData(numTriangles);
+    foreach(ref data; m_data)
+    {
+      file.read(data.n0);
+      file.read(data.n1);
+      file.read(data.n2);
+      uint materialIndex;
+      file.read(materialIndex);
+      data.material = &m_materials[materialIndex];
+    }
   }
 }
