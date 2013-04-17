@@ -16,7 +16,7 @@ __gshared Camera g_camera;
 __gshared Scene g_scene;
 __gshared uint g_width = 320;
 __gshared uint g_height = 240;
-__gshared uint g_numThreads = 1;
+__gshared uint g_numThreads = 8;
 
 // Holds all information for a single pixel visible on the screen
 struct Pixel
@@ -47,12 +47,11 @@ void loadScene()
 {
   g_camera = New!Camera(30.0f, cast(float)g_height / cast(float)g_width);
   
-  g_camera.setTransform(vec3(25, 10, 20), vec3(0, 0, 0), vec3(0, 0, 1));
-  g_scene = New!Scene("teapot.thModel", &fillMaterial);
+  /*g_camera.setTransform(vec3(25, 10, 20), vec3(0, 0, 0), vec3(0, 0, 1));
+  g_scene = New!Scene("teapot.thModel", &fillMaterial);*/
 
-  
-  /*g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
-  g_scene = New!Scene("cornell-box.thModel", &fillMaterial);*/
+  g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
+  g_scene = New!Scene("cornell-box.thModel", &fillMaterial);
 
   /*g_camera.setTransform(vec3(-1, 0, 7), vec3(0, 0, 7), vec3(0, 0, 1));
   g_scene = New!Scene("sponza2.thModel", &fillMaterial);*/
@@ -87,10 +86,12 @@ void fillMaterial(ref Material mat, const(char)[] materialName)
 }
 
 // Computes a view ray for a given pixel index
-Ray getViewRay(uint pixelIndex)
+Ray getViewRay(uint pixelIndex, ref Random gen)
 {
-  float x = cast(float)(pixelIndex % g_width) / cast(float)g_width * 2.0f - 1.0f;
-  float y = cast(float)(pixelIndex / g_width) / cast(float)g_height * 2.0f - 1.0f;
+  float pixelSizeX = 1.0f / cast(float)g_width;
+  float pixelSizeY = 1.0f / cast(float)g_height;
+  float x = cast(float)(pixelIndex % g_width) / cast(float)g_width * 2.0f - 1.0f + uniform(-pixelSizeX, pixelSizeX, gen);
+  float y = cast(float)(pixelIndex / g_width) / cast(float)g_height * 2.0f - 1.0f + uniform(-pixelSizeY, pixelSizeY, gen);
   return g_camera.getScreenRay(x, y);
 }
 
@@ -123,7 +124,7 @@ void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
   }*/
   foreach(uint pixelIndex, ref pixel; pixels)
   {
-    Ray viewRay = getViewRay(pixelOffset + pixelIndex);
+    Ray viewRay = getViewRay(pixelOffset + pixelIndex, gen);
     float rayPos = 0.0f;
     vec3 normal;
     const(Scene.TriangleData)* data;
@@ -242,7 +243,8 @@ vec3 evalRenderingEquation(ref const(vec3) dir, ref const(vec3) pos, ref const(v
     auto outDir = angleToLocalDirection(phi, psi);
     outDir = hitData.localToWorld * outDir;
 
-    auto result = (evalRenderingEquation(outDir, hitPos, hitNormal, hitData, gen, depth + 1) * BRDF * data.material.color * normal.dot(dir)) * PI + data.material.emessive * data.material.color;
+    
+    auto result = (evalRenderingEquation(outDir, hitPos, hitNormal, hitData, gen, depth + 1) * BRDF * data.material.color /* normal.dot(dir)*/) * PI + data.material.emessive * data.material.color;
     //assert(result >= 0.0f);
     return result;
   }

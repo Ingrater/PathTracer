@@ -301,6 +301,7 @@ int main(string[] argv)
   }
 
   auto endRendering = Zeitpunkt(timer);
+  SDL.Quit();
   writefln("Rendering took %f seconds", (endRendering - startRendering) / 1000.0f);
   core.stdc.stdlib.system("pause");
 
