@@ -510,69 +510,6 @@ class Scene
     Delete(m_materials);
   }
 
-  private bool traceHelper(const(Node*) node, ref const(Ray) ray, ref float rayPos, ref vec3 normal, ref const(TriangleData)* data) const
-  {
-    if(node.same || node.sphere.intersects(ray))
-    {
-      /*if(depth == 8)
-      {
-        float t = 0.0f;
-        if(node.sphere.computeNearestIntersection(ray, t))
-        {
-          if(t > 0.0f && t < rayPos)
-          {
-            vec3 point = ray.get(t);
-            rayPos = t;
-            normal = (point - node.sphere.pos).normalize();
-          }
-          return true;
-        }
-        return false;
-      }*/
-      if(node.dummy is null)
-      {
-        //leaf node
-        float pos = -1.0f;
-        float u = 0.0f, v = 0.0f;
-        if( node.triangle.intersects(ray, pos, u, v) && pos < rayPos && pos >= 0.0f )
-        {
-          auto n = node.triangle.plane.normal;
-          if(n.dot(ray.dir) < 0)
-          {
-					  rayPos = pos;
-            size_t index = cast(size_t)(node.triangle - m_triangles.ptr);
-            const(TriangleData*) ldata = &m_data[index];
-
-            float x = 1.0f / (u + v);
-            float u1 = x * u;
-            float v1 = x * v;
-            const float sqrt2 = 1.414213562f;
-            float d1 = sqrtf((1.0f-u1)*(1.0f-u1) + v1*v1) / sqrt2;
-            float d2 = sqrtf(u1*u1 + (1.0f-v1)*(1.0f-v1)) / sqrt2;
-            vec3 interpolated1 = ldata.n1 * d1 + ldata.n2 * d2;
-
-            float len = sqrtf(u1*u1 + v1*v1);
-            float i1 = sqrtf(u*u+v*v) / len;
-            float i2 = 1.0f - i1;
-
-            normal = ldata.n0 * i2 + interpolated1 * i1;
-            data = ldata;
-            return true;
-          }
-          return false;
-        }
-      }
-      else
-      {
-        //non leaf node
-        bool res1 = traceHelper(node.childs[0], ray, rayPos, normal, data);
-        bool res2 = traceHelper(node.childs[1], ray, rayPos, normal, data);
-        return res1 || res2;
-      }
-    }
-    return false;
-  }
-
 	/**
   * Tests for a intersection with a already correctly transformed ray and this collision hull
   * Params:
@@ -586,7 +523,71 @@ class Scene
       FloatingPointControl fpctrl;
       fpctrl.enableExceptions(FloatingPointControl.severeExceptions);
     }
-		return traceHelper(m_rootNode, ray, rayPos, normal, data);
+
+    bool traceHelper(const(Node*) node)
+    {
+      if(node.same || node.sphere.intersects(ray))
+      {
+        /*if(depth == 8)
+        {
+        float t = 0.0f;
+        if(node.sphere.computeNearestIntersection(ray, t))
+        {
+        if(t > 0.0f && t < rayPos)
+        {
+        vec3 point = ray.get(t);
+        rayPos = t;
+        normal = (point - node.sphere.pos).normalize();
+        }
+        return true;
+        }
+        return false;
+        }*/
+        if(node.dummy is null)
+        {
+          //leaf node
+          float pos = -1.0f;
+          float u = 0.0f, v = 0.0f;
+          if( node.triangle.intersects(ray, pos, u, v) && pos < rayPos && pos >= 0.0f )
+          {
+            auto n = node.triangle.plane.normal;
+            if(n.dot(ray.dir) < 0)
+            {
+              rayPos = pos;
+              size_t index = cast(size_t)(node.triangle - m_triangles.ptr);
+              const(TriangleData*) ldata = &m_data[index];
+
+              float x = 1.0f / (u + v);
+              float u1 = x * u;
+              float v1 = x * v;
+              const float sqrt2 = 1.414213562f;
+              float d1 = sqrtf((1.0f-u1)*(1.0f-u1) + v1*v1) / sqrt2;
+              float d2 = sqrtf(u1*u1 + (1.0f-v1)*(1.0f-v1)) / sqrt2;
+              vec3 interpolated1 = ldata.n1 * d1 + ldata.n2 * d2;
+
+              float len = sqrtf(u1*u1 + v1*v1);
+              float i1 = sqrtf(u*u+v*v) / len;
+              float i2 = 1.0f - i1;
+
+              normal = ldata.n0 * i2 + interpolated1 * i1;
+              data = ldata;
+              return true;
+            }
+            return false;
+          }
+        }
+        else
+        {
+          //non leaf node
+          bool res1 = traceHelper(node.childs[0]);
+          bool res2 = traceHelper(node.childs[1]);
+          return res1 || res2;
+        }
+      }
+      return false;
+    }
+
+		return traceHelper(m_rootNode);
 	}
 
   /**
