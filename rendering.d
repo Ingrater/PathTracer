@@ -50,13 +50,11 @@ void loadScene()
   /*g_camera.setTransform(vec3(25, 10, 20), vec3(0, 0, 0), vec3(0, 0, 1));
   g_scene = New!Scene("teapot.thModel", &fillMaterial);*/
 
-  /*g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
-  g_scene = New!Scene("cornell-box.thModel", &fillMaterial);*/
+  g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
+  g_scene = New!Scene("cornell-box.thModel", &fillMaterial);
 
-  g_camera.setTransform(vec3(-660, -350, 600), vec3(-658, -349, 599.8), vec3(0, 0, 1));
-  //g_camera.setTransform(vec3(0,0,0), vec3(0,0.1,1), vec3(0, 0, 1));
-  g_scene = New!Scene("sponza2.tree", &fillMaterial);
-  //g_scene.saveTree("sponza2.tree");
+  /*g_camera.setTransform(vec3(-1, 0, 7), vec3(0, 0, 7), vec3(0, 0, 1));
+  g_scene = New!Scene("sponza2.thModel", &fillMaterial);*/
 
   /*g_camera.setTransform(vec3(3, 3, 3), vec3(0, 0, 0), vec3(0, 0, 1));
   g_scene = New!Scene("chest1.thModel";)*/
@@ -85,12 +83,6 @@ void fillMaterial(ref Material mat, const(char)[] materialName)
     mat.color.y = 1.0f;
     mat.color.z = 0.0f;
   }
-  else if(materialName == "Blue")
-  {
-    mat.color.x = 0.0f;
-    mat.color.y = 0.0f;
-    mat.color.z = 1.0f;
-  }
 }
 
 // Computes a view ray for a given pixel index
@@ -116,99 +108,6 @@ float haltonSequence(float index, float base)
   return result;
 }
 
-/**
- * computes the output color of the generated image
- * 
- * Params: 
- *  pixelOffset = the pixel offset (for multithreading)
- *  pixels = the pixels that should be computed
- *  gen = the random number generator
- */
-void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
-{
-  /*debug {
-    FloatingPointControl fpctrl;
-    fpctrl.enableExceptions(FloatingPointControl.severeExceptions);
-  }*/
-  foreach(uint pixelIndex, ref pixel; pixels)
-  {
-    Ray viewRay = getViewRay(pixelOffset + pixelIndex, gen);
-    float rayPos = 0.0f;
-    vec3 normal;
-    const(Scene.TriangleData)* data;
-    if( g_scene.trace(viewRay, rayPos, normal, data))
-    {
-      vec3 hitPos = viewRay.get(rayPos);
-
-      auto e = vec3(0.0f, 0.0f, 0.0f);
-      enum uint N = 3;
-      //naive sampling
-      for(uint i=0; i<N; i++)
-      {
-        float psi = uniform(0.0f, PI * 2.0f, gen);
-        float phi = uniform(0.0f, PI_2, gen);
-        auto outDir = angleToLocalDirection(phi, psi);
-        outDir = data.localToWorld * outDir;
-        e += evalRenderingEquation(outDir, hitPos, normal, data, gen, 0);
-      }
-
-      // grid sampling
-      /*
-      immutable(float) step = 1.0f / 3.0f;
-      for(uint x=0; x<3; x++)
-      {
-        for(uint y=0; y<3; y++)
-        {
-          float psi = uniform(x * step * PI * 2.0f, (x+1) * step * PI * 2.0f, gen);
-          float phi = uniform(y * step * PI_2, (y+1) * step * PI_2, gen);
-          auto outDir = angleToLocalDirection(phi, psi);
-          outDir = data.localToWorld * outDir;
-          e += evalRenderingEquation(outDir, hitPos, normal, data, gen, 0);
-        }
-      }*/
-
-      //halton sampling
-      /*for(uint i=0; i<N; i++)
-      {
-        float psi = haltonSequence(pixel.n + i, 2.0f) * PI * 2.0f;
-        float phi = haltonSequence(pixel.n + i, 3.0f) * PI_2;
-        auto outDir = angleToLocalDirection(phi, psi);
-        outDir = data.localToWorld * outDir;
-        e += evalRenderingEquation(outDir, hitPos, normal, data, gen, 0);
-      }*/
-      
-      pixel.n += cast(float)N;
-      pixel.sum += e;
-      e = pixel.sum / pixel.n;
-
-      pixel.color.x = e.x;
-      pixel.color.y = e.y;
-      pixel.color.z = e.z;
-      /*if(data.material.emessive > 0.0f)
-      {
-        pixel.color.x = pixel.color.y = pixel.color.z = 1.0f;
-      }
-      else
-      {
-        float NdotL = abs(normal.dot(-viewRay.dir));
-        pixel.color.x = data.material.color.x * NdotL;
-        pixel.color.y = data.material.color.y * NdotL;
-        pixel.color.z = data.material.color.z * NdotL;
-      }*/
-      /*float NdotL = abs(normal.dot(-viewRay.dir));
-      pixel.color.x = NdotL;
-      pixel.color.y = NdotL;
-      pixel.color.z = NdotL;*/
-    }
-    else
-    {
-      //pixel.color.x = pixel.color.z = 1.0f;
-      //pixel.color.y = 0.0f;
-      pixel.color = sampleSky(viewRay.dir);
-    }
-  }                          
-}
-
 /*
 psi = 0..360
 phi = 0..90
@@ -225,47 +124,101 @@ vec3 angleToLocalDirection(float phi, float psi)
   return result;
 }
 
-vec3 sampleSky(vec3 dir)
+vec3 angleToDirection(float phi, float psi, ref const(vec3) normal)
 {
-  auto sunDir = vec3(1, 1, 6).normalize();
-  float dot = sunDir.dot(dir);
-  if(dot > 0.997f)
-    return vec3(1.0f, 0.984f, 0.8f) * 20.0f;
-  return vec3(0.682f, 0.977f, 1.0f);
+  float cosPhi = cosf(phi);
+  auto localDir = vec3(cosf(psi) * cosPhi, sinf(psi) * cosPhi, sinf(phi));
+
+  auto up = normal;
+  auto dir = vec3(1,0,0);
+  if(abs(dir.dot(up)) > 0.9f)
+  {
+    dir = vec3(0,1,0);
+  }
+  auto right = up.cross(dir).normalize();
+  dir = up.cross(right).normalize();
+  return mat3(dir, right, up) * localDir;
 }
 
-vec3 evalRenderingEquation(ref const(vec3) dir, ref const(vec3) pos, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
+/+void computeL(uint pixelIndex, ref Pixel pixel, ref Random gen)
 {
-  const(float) BRDF = 1.0f / (PI); //* 2.0f);
-  if(depth > 3 || data.material.emessive > 0.0f)// || uniform(0.0f, 1.0f, gen) > BRDF * 2.0f)
-  {
-    //writefln("exit at depth %d", depth);
-    return data.material.emessive * data.material.color; 
-  }
-  auto outRay = Ray(pos + normal * 0.001f, dir);
-
-  //trace into the scene
+  Ray viewRay = getViewRay(pixelIndex);
   float rayPos = 0.0f;
-  vec3 hitNormal;
-  const(Scene.TriangleData)* hitData;
-  if( g_scene.trace(outRay, rayPos, hitNormal, hitData))
-  {
-    auto hitPos = outRay.get(rayPos);
-
-    /*float index = cast(float)uniform(0, 900, gen);
-    float psi = haltonSequence(index, 2.0f) * PI * 2.0f;
-    float phi = haltonSequence(index, 3.0f) * PI_2;*/
-
-    float psi = uniform(0.0f, PI * 2.0f, gen);
-    float phi = uniform(0.0f, PI_2, gen);
-    auto outDir = angleToLocalDirection(phi, psi);
-    outDir = hitData.localToWorld * outDir;
-
-    
-    auto result = (evalRenderingEquation(outDir, hitPos, hitNormal, hitData, gen, depth + 1) * BRDF * data.material.color /* normal.dot(dir)*/) * PI + data.material.emessive * data.material.color;
-    //assert(result >= 0.0f);
-    return result;
+  vec3 normal;
+  const(Scene.TriangleData)* data;
+  if( g_scene.trace(viewRay, rayPos, normal, data)){
+    if(data.material.emessive > 0.0f)
+    {
+      pixel.color.x = pixel.color.y = pixel.color.z = 1.0f;
+    }
+    else
+    {
+      float NdotL = abs(normal.dot(-viewRay.dir));
+      pixel.color = data.material.color * NdotL;
+    }
+    /*float NdotL = abs(normal.dot(-viewRay.dir));
+    pixel.color.x = NdotL;
+    pixel.color.y = NdotL;
+    pixel.color.z = NdotL;*/
   }
-  //writefln("exit at depth %d", depth);
-  return data.material.emessive * data.material.color + sampleSky(dir); 
+  else
+  {
+    pixel.color = vec3(0,0,0);
+  }
+}+/
+
+enum float BRDF = 1.0f / PI;
+
+void computeL(uint pixelIndex, ref Pixel pixel, ref Random gen)
+{
+	enum uint N = 10;
+	for(uint i=0; i<N; i++){
+		Ray viewRay = getViewRay(pixelIndex, gen);
+		float rayPos = 0.0f;
+		vec3 normal;
+		const(Scene.TriangleData)* data;
+		if( g_scene.trace(viewRay, rayPos, normal, data)){
+			vec3 hitPos = viewRay.get(rayPos);
+			pixel.sum += computeL(hitPos, -viewRay.dir, normal, data, gen, 0);
+		}
+		else{
+		  pixel.color.x = pixel.color.y = pixel.color.z = 0.0f;
+		}
+	}
+	pixel.n += N;
+	pixel.color = pixel.sum / pixel.n;
+}
+
+vec3 computeL(vec3 pos, vec3 theta, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
+{
+	if(depth > 2) return data.material.emessive * data.material.color; 
+	float psi = uniform(0, 2 * PI, gen);
+	float phi = uniform(0, PI_2, gen);
+	vec3 sampleDir = angleToDirection(phi, psi, normal);
+	Ray sampleRay = Ray(pos, sampleDir);
+	float hitDistance = 0.0f;
+	vec3 hitNormal;
+	const(Scene.TriangleData)* hitData;
+	if( g_scene.trace(sampleRay, hitDistance, hitNormal, hitData)){
+		vec3 hitPos = sampleRay.get(hitDistance);
+		return (data.material.emessive * data.material.color) + 
+      (BRDF * PI * data.material.color * computeL(hitPos, -sampleDir, hitNormal, hitData, gen, depth + 1));
+	}
+	return data.material.emessive * data.material.color; 
+}
+
+/**
+* computes the output color of the generated image
+* 
+* Params: 
+*  pixelOffset = the pixel offset (for multithreading)
+*  pixels = the pixels that should be computed
+*  gen = the random number generator
+*/
+void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
+{
+  foreach(uint pixelIndex, ref pixel; pixels)
+  {
+    computeL(pixelOffset + pixelIndex, pixel, gen);
+  }                          
 }
