@@ -50,8 +50,13 @@ void loadScene()
   /*g_camera.setTransform(vec3(25, 10, 20), vec3(0, 0, 0), vec3(0, 0, 1));
   g_scene = New!Scene("teapot.thModel", &fillMaterial);*/
 
-  g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
-  g_scene = New!Scene("cornell-box.thModel", &fillMaterial);
+  /*g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
+  g_scene = New!Scene("cornell-box.thModel", &fillMaterial);*/
+
+  g_camera.setTransform(vec3(-660, -350, 600), vec3(-658, -349, 599.8), vec3(0, 0, 1));
+  //g_camera.setTransform(vec3(0,0,0), vec3(0,0.1,1), vec3(0, 0, 1));
+  g_scene = New!Scene("sponza2.tree", &fillMaterial);
+  //g_scene.saveTree("sponza3.tree");
 
   /*g_camera.setTransform(vec3(-1, 0, 7), vec3(0, 0, 7), vec3(0, 0, 1));
   g_scene = New!Scene("sponza2.thModel", &fillMaterial);*/
@@ -82,6 +87,12 @@ void fillMaterial(ref Material mat, const(char)[] materialName)
     mat.color.x = 0.0f;
     mat.color.y = 1.0f;
     mat.color.z = 0.0f;
+  }
+  else if(materialName == "Blue")
+  {
+    mat.color.x = 0.0f;
+    mat.color.y = 0.0f;
+    mat.color.z = 1.0f;
   }
 }
 
@@ -140,6 +151,15 @@ vec3 angleToDirection(float phi, float psi, ref const(vec3) normal)
   return mat3(dir, right, up) * localDir;
 }
 
+vec3 sampleSky(vec3 dir)
+{
+  auto sunDir = vec3(1, 1, 6).normalize();
+  float dot = sunDir.dot(dir);
+  if(dot > 0.997f)
+    return vec3(1.0f, 0.984f, 0.8f) * 30.0f;
+  return vec3(0.682f, 0.977f, 1.0f);
+}
+
 /+void computeL(uint pixelIndex, ref Pixel pixel, ref Random gen)
 {
   Ray viewRay = getViewRay(pixelIndex);
@@ -171,7 +191,7 @@ enum float BRDF = 1.0f / PI;
 
 void computeL(uint pixelIndex, ref Pixel pixel, ref Random gen)
 {
-	enum uint N = 10;
+	enum uint N = 5;
 	for(uint i=0; i<N; i++){
 		Ray viewRay = getViewRay(pixelIndex, gen);
 		float rayPos = 0.0f;
@@ -182,7 +202,7 @@ void computeL(uint pixelIndex, ref Pixel pixel, ref Random gen)
 			pixel.sum += computeL(hitPos, -viewRay.dir, normal, data, gen, 0);
 		}
 		else{
-		  pixel.color.x = pixel.color.y = pixel.color.z = 0.0f;
+		  pixel.sum += sampleSky(viewRay.dir);
 		}
 	}
 	pixel.n += N;
@@ -191,7 +211,8 @@ void computeL(uint pixelIndex, ref Pixel pixel, ref Random gen)
 
 vec3 computeL(vec3 pos, vec3 theta, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
 {
-	if(depth > 2) return data.material.emessive * data.material.color; 
+  if(depth > 2)
+    return data.material.emessive * data.material.color; 
 	float psi = uniform(0, 2 * PI, gen);
 	float phi = uniform(0, PI_2, gen);
 	vec3 sampleDir = angleToDirection(phi, psi, normal);
@@ -204,7 +225,7 @@ vec3 computeL(vec3 pos, vec3 theta, ref const(vec3) normal, const(Scene.Triangle
 		return (data.material.emessive * data.material.color) + 
       (BRDF * PI * data.material.color * computeL(hitPos, -sampleDir, hitNormal, hitData, gen, depth + 1));
 	}
-	return data.material.emessive * data.material.color; 
+	return (data.material.emessive * data.material.color) + (BRDF * PI * data.material.color * sampleSky(sampleDir)); 
 }
 
 /**

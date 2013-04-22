@@ -13,6 +13,8 @@ static import core.cpuid;
 import sdl;
 import rendering;
 
+//version = PerformanceTest;
+
 void setPixel(SDL.Surface *screen, int x, int y, ubyte r, ubyte g, ubyte b)
 {
   uint *pixmem32;
@@ -223,62 +225,71 @@ int main(string[] argv)
   float totalTime = 0.0f;
 
   auto startRendering = Zeitpunkt(timer);
-
+  auto startPass = startRendering;
   while(g_run)
   {
     // one time rendering
-    /*if(progress < steps)
+    version(PerformanceTest)
     {
-      auto start = Zeitpunkt(timer);
-      auto startIndex = progress * step;
-      computeOutputColor(startIndex, pixels[startIndex..startIndex+step], gen);
-      drawScreen(screen, pixels);
-      progress++;
-      auto end = Zeitpunkt(timer);
-      totalTime += (end - start) / 1000.0f;
-      writefln("progress %d", progress);
-      if(progress == steps)
-        writefln("timeTaken %f", totalTime);
-    }*/
-
-    // scanline rendering
-    if(g_numThreads == 1)
-    {
-      auto startIndex = progress * step;
-      computeOutputColor(startIndex, pixels[startIndex..startIndex+step], gen);
-      drawScreen(screen, pixels);
-      progress++;
-      if(progress >= steps)
-        progress = 0;
-    }
-    else //if(progress < 1)
-    // task based rendering
-    {
-      if(taskIdentifier.allFinished)
+      if(progress < steps)
       {
+        auto start = Zeitpunkt(timer);
+        auto startIndex = progress * step;
+        computeOutputColor(startIndex, pixels[startIndex..startIndex+step], gen);
         drawScreen(screen, pixels);
-        if(progress > 0)
-          writefln("pass %d done", progress);
         progress++;
-        foreach(task; tasks)
-        {
-          spawn(task);
-        }
+        auto end = Zeitpunkt(timer);
+        totalTime += (end - start) / 1000.0f;
+        writefln("progress %d", progress);
+        if(progress == steps)
+          writefln("timeTaken %f", totalTime);
       }
-      g_localTaskQueue.executeOneTask();      
     }
-    /*else
+    else
     {
-      if(taskIdentifier.allFinished)
+      // scanline rendering
+      if(g_numThreads == 1)
       {
+        auto startIndex = progress * step;
+        computeOutputColor(startIndex, pixels[startIndex..startIndex+step], gen);
         drawScreen(screen, pixels);
-        g_run = false;
+        progress++;
+        if(progress >= steps)
+          progress = 0;
       }
-      else
+      else //if(progress < 1)
+      // task based rendering
       {
-        g_localTaskQueue.executeOneTask();  
+        if(taskIdentifier.allFinished)
+        {
+          drawScreen(screen, pixels);
+          if(progress > 0)
+          {
+            auto endPass = Zeitpunkt(timer);
+            writefln("pass %d done in %f seconds", progress, (endPass - startPass) / 1000.0f);
+            startPass = endPass;
+          }
+          progress++;
+          foreach(task; tasks)
+          {
+            spawn(task);
+          }
+        }
+        g_localTaskQueue.executeOneTask();      
       }
-    }*/
+      /*else
+      {
+        if(taskIdentifier.allFinished)
+        {
+          drawScreen(screen, pixels);
+          g_run = false;
+        }
+        else
+        {
+          g_localTaskQueue.executeOneTask();  
+        }
+      }*/
+    }
 
     while(SDL.PollEvent(&event)) 
     {      
