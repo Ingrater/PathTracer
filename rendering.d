@@ -14,8 +14,8 @@ import thBase.container.vector;
 // global variables
 __gshared Camera g_camera;
 __gshared Scene g_scene;
-__gshared uint g_width = 320;
-__gshared uint g_height = 240;
+__gshared uint g_width = 640;
+__gshared uint g_height = 480;
 __gshared uint g_numThreads = 8;
 
 // Holds all information for a single pixel visible on the screen
@@ -266,7 +266,9 @@ vec3 computeLrefl(vec3 pos, vec3 theta, ref const(vec3) normal, const(Scene.Tria
 
 vec3 computeLindirect(vec3 pos, vec3 theta, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
 {
-  if(depth > 3)
+  float a = uniform(0.0f, 1.0f, gen);
+  float absorb = 0.7f;
+  if(a > absorb || depth > 5)
     return vec3(0.0f, 0.0f, 0.0f);
 	float psi = uniform(0, 2 * PI, gen);
 	float phi = uniform(0, PI_2, gen);
@@ -310,27 +312,24 @@ vec3 computeLdirect(vec3 x, vec3 theta, ref const(vec3) normalX, const(Scene.Tri
 
 void computeL(uint pixelIndex, ref Pixel pixel, ref Random gen)
 {
-	enum uint N = 2;
-	for(uint i=0; i<N; i++){
-		Ray viewRay = getViewRay(pixelIndex, gen);
-		float rayPos = 0.0f;
-		vec3 normal;
-		const(Scene.TriangleData)* data;
-		if( g_scene.trace(viewRay, rayPos, normal, data)){
-			vec3 hitPos = viewRay.get(rayPos);
-			pixel.sum += computeL(hitPos, -viewRay.dir, normal, data, gen, 0);
-		}
-		else{
-		  pixel.sum += sampleSky(viewRay.dir);
-		}
+	enum uint N = 20;
+	Ray viewRay = getViewRay(pixelIndex, gen);
+	float rayPos = 0.0f;
+	vec3 normal;
+	const(Scene.TriangleData)* data;
+	if( g_scene.trace(viewRay, rayPos, normal, data)){
+    vec3 hitPos = viewRay.get(rayPos);
+    vec3 sum;
+    for(uint i=0; i<N; i++){
+			sum += computeLindirect(hitPos, -viewRay.dir, normal, data, gen, 0);
+    }
+    pixel.sum += data.material.emissive * data.material.color + computeLdirect(hitPos, -viewRay.dir, normal, data, gen) + sum / cast(float)N;
 	}
-	pixel.n += N;
+	else{
+		pixel.sum += sampleSky(viewRay.dir);
+	}
+	pixel.n += 1;
 	pixel.color = pixel.sum / pixel.n;
-}
-
-vec3 computeL(vec3 pos, vec3 theta, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
-{
-  return data.material.emissive * data.material.color + computeLrefl(pos, theta, normal, data, gen, depth);
 }
 
 /**
