@@ -8,8 +8,8 @@ import thBase.math3d.all;
 import thBase.io;
 import std.random;
 import std.math;
-import core.simd;
 import core.stdc.math;
+import thBase.container.vector;
 
 // global variables
 __gshared Camera g_camera;
@@ -30,15 +30,24 @@ struct Pixel
 // Holds all information about a material
 struct Material
 {
-  float emessive;
+  float emissive;
   vec3 color;
 };
+
+// Holds all information for a emissive triangle
+struct LightTriangle
+{
+  vec3 e1, e2; //the two edges of the triangle
+  float area; // the area of the light triangle
+}
+__gshared Vector!LightTriangle g_lightTriangles;
 
 // Gets called on program shutdown
 shared static ~this()
 {
   Delete(g_camera);
   Delete(g_scene);
+  Delete(g_lightTriangles);
 }
 
 
@@ -50,12 +59,12 @@ void loadScene()
   /*g_camera.setTransform(vec3(25, 10, 20), vec3(0, 0, 0), vec3(0, 0, 1));
   g_scene = New!Scene("teapot.thModel", &fillMaterial);*/
 
-  /*g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
-  g_scene = New!Scene("cornell-box.thModel", &fillMaterial);*/
+  g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
+  g_scene = New!Scene("cornell-box.thModel", &fillMaterial);
 
-  g_camera.setTransform(vec3(-660, -350, 600), vec3(-658, -349, 599.8), vec3(0, 0, 1));
+  //g_camera.setTransform(vec3(-660, -350, 600), vec3(-658, -349, 599.8), vec3(0, 0, 1));
   //g_camera.setTransform(vec3(0,0,0), vec3(0,0.1,1), vec3(0, 0, 1));
-  g_scene = New!Scene("sponza2.tree", &fillMaterial);
+  //g_scene = New!Scene("sponza2.tree", &fillMaterial);
   //g_scene.saveTree("sponza3.tree");
 
   /*g_camera.setTransform(vec3(-1, 0, 7), vec3(0, 0, 7), vec3(0, 0, 1));
@@ -63,6 +72,23 @@ void loadScene()
 
   /*g_camera.setTransform(vec3(3, 3, 3), vec3(0, 0, 0), vec3(0, 0, 1));
   g_scene = New!Scene("chest1.thModel";)*/
+
+  //find all light triangles
+  auto lightTriangles = New!(Vector!LightTriangle)();
+  foreach(size_t i, ref triangleData; g_scene.triangleData)
+  {
+    if(triangleData.material !is null && triangleData.material.emissive > 0.0f)
+    {
+      LightTriangle lightTriangle;
+      const(Triangle)* t = &g_scene.triangles[i];
+      lightTriangle.e1 = t.v1 - t.v0;
+      lightTriangle.e2 = t.v2 - t.v0;
+      lightTriangle.area = t.area;
+      lightTriangles ~= lightTriangle;
+    }
+  }
+  g_lightTriangles = lightTriangles;
+  writefln("Scene has %d light triangles", lightTriangles.length);
 }
 
 // Called for each material found in the model file
@@ -71,10 +97,10 @@ void fillMaterial(ref Material mat, const(char)[] materialName)
   mat.color.x = 1.0f;
   mat.color.y = 1.0f;
   mat.color.z = 1.0f;
-  mat.emessive = 0.0f;
+  mat.emissive = 0.0f;
   if(materialName == "Light")
   {
-    mat.emessive = 10.0f;
+    mat.emissive = 10.0f;
   }
   else if(materialName == "Red")
   {
@@ -167,7 +193,7 @@ vec3 sampleSky(vec3 dir)
   vec3 normal;
   const(Scene.TriangleData)* data;
   if( g_scene.trace(viewRay, rayPos, normal, data)){
-    if(data.material.emessive > 0.0f)
+    if(data.material.emissive > 0.0f)
     {
       pixel.color.x = pixel.color.y = pixel.color.z = 1.0f;
     }
@@ -212,7 +238,7 @@ void computeL(uint pixelIndex, ref Pixel pixel, ref Random gen)
 vec3 computeL(vec3 pos, vec3 theta, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
 {
   if(depth > 2)
-    return data.material.emessive * data.material.color; 
+    return data.material.emissive * data.material.color; 
 	float psi = uniform(0, 2 * PI, gen);
 	float phi = uniform(0, PI_2, gen);
 	vec3 sampleDir = angleToDirection(phi, psi, normal);
@@ -222,10 +248,10 @@ vec3 computeL(vec3 pos, vec3 theta, ref const(vec3) normal, const(Scene.Triangle
 	const(Scene.TriangleData)* hitData;
 	if( g_scene.trace(sampleRay, hitDistance, hitNormal, hitData)){
 		vec3 hitPos = sampleRay.get(hitDistance);
-		return (data.material.emessive * data.material.color) + 
+		return (data.material.emissive * data.material.color) + 
       (BRDF * PI * data.material.color * computeL(hitPos, -sampleDir, hitNormal, hitData, gen, depth + 1));
 	}
-	return (data.material.emessive * data.material.color) + (BRDF * PI * data.material.color * sampleSky(sampleDir)); 
+	return (data.material.emissive * data.material.color) + (BRDF * PI * data.material.color * sampleSky(sampleDir)); 
 }
 
 /**

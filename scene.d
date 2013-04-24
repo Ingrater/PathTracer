@@ -619,6 +619,22 @@ class Scene
   }
 
   /**
+   * returns a array of all triangles
+   */
+  @property const(Triangle)[] triangles() const 
+  {
+    return m_triangles;
+  }
+
+  /**
+   * returns a array of all triangle data
+   */
+  @property const(TriangleData)[] triangleData() const
+  {
+    return m_data;
+  }
+
+  /**
    * saves the internal tree structure to a file
    */
   void saveTree(const(char)[] filename)
