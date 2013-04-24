@@ -37,10 +37,13 @@ struct Material
 // Holds all information for a emissive triangle
 struct LightTriangle
 {
+  vec3 v0; // one vertex of the triangle
   vec3 e1, e2; //the two edges of the triangle
   float area; // the area of the light triangle
+  float probability;
 }
 __gshared Vector!LightTriangle g_lightTriangles;
+__gshared float g_totalLightSourceArea = 0.0f;
 
 // Gets called on program shutdown
 shared static ~this()
@@ -63,8 +66,10 @@ void loadScene()
   g_scene = New!Scene("cornell-box.thModel", &fillMaterial);
 
   //g_camera.setTransform(vec3(-660, -350, 600), vec3(-658, -349, 599.8), vec3(0, 0, 1));
-  //g_camera.setTransform(vec3(0,0,0), vec3(0,0.1,1), vec3(0, 0, 1));
   //g_scene = New!Scene("sponza2.tree", &fillMaterial);
+  
+  //g_camera.setTransform(vec3(0,0,0), vec3(0,0.1,1), vec3(0, 0, 1));
+
   //g_scene.saveTree("sponza3.tree");
 
   /*g_camera.setTransform(vec3(-1, 0, 7), vec3(0, 0, 7), vec3(0, 0, 1));
@@ -81,44 +86,82 @@ void loadScene()
     {
       LightTriangle lightTriangle;
       const(Triangle)* t = &g_scene.triangles[i];
+      lightTriangle.v0 = t.v0;
       lightTriangle.e1 = t.v1 - t.v0;
       lightTriangle.e2 = t.v2 - t.v0;
       lightTriangle.area = t.area;
       lightTriangles ~= lightTriangle;
+      g_totalLightSourceArea += lightTriangle.area;
     }
+  }
+  // compute probabilities
+  foreach(ref light; lightTriangles)
+  {
+    light.probability = light.area / g_totalLightSourceArea;
   }
   g_lightTriangles = lightTriangles;
   writefln("Scene has %d light triangles", lightTriangles.length);
 }
 
+vec3 pickRandomLightPoint(ref Random gen)
+{
+  float a = uniform(0.0f, 1.0f, gen);
+  foreach(ref light; g_lightTriangles)
+  {
+    if(light.probability > a)
+    {
+      while(true)
+      {
+        float u = uniform(0.0f, 1.0f, gen);
+        float v = uniform(0.0f, 1.0f, gen);
+        if(u + v <= 1.0f)
+        {
+          return light.v0 + light.e1 * v + light.e2 * u;
+        }
+      }
+    }
+    a -= light.probability;
+  }
+  auto light = g_lightTriangles[g_lightTriangles.length-1];
+  while(true)
+  {
+    float u = uniform(0.0f, 1.0f, gen);
+    float v = uniform(0.0f, 1.0f, gen);
+    if(u + v <= 1.0f)
+    {
+      return light.v0 + light.e1 * v + light.e2 * u;
+    }
+  }
+}
+
 // Called for each material found in the model file
 void fillMaterial(ref Material mat, const(char)[] materialName)
 {
-  mat.color.x = 1.0f;
-  mat.color.y = 1.0f;
-  mat.color.z = 1.0f;
+  mat.color.x = 0.7f;
+  mat.color.y = 0.7f;
+  mat.color.z = 0.7f;
   mat.emissive = 0.0f;
   if(materialName == "Light")
   {
-    mat.emissive = 10.0f;
+    mat.emissive = 0.5f;
   }
   else if(materialName == "Red")
   {
-    mat.color.x = 1.0f;
+    mat.color.x = 0.7f;
     mat.color.y = 0.0f;
     mat.color.z = 0.0f;
   }
   else if(materialName == "Green")
   {
     mat.color.x = 0.0f;
-    mat.color.y = 1.0f;
+    mat.color.y = 0.7f;
     mat.color.z = 0.0f;
   }
   else if(materialName == "Blue")
   {
     mat.color.x = 0.0f;
     mat.color.y = 0.0f;
-    mat.color.z = 1.0f;
+    mat.color.z = 0.7f;
   }
 }
 
@@ -215,9 +258,59 @@ vec3 sampleSky(vec3 dir)
 
 enum float BRDF = 1.0f / PI;
 
+vec3 computeLrefl(vec3 pos, vec3 theta, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
+{
+  return computeLdirect(pos, theta, normal, data, gen) +
+         computeLindirect(pos, theta, normal, data, gen, depth);
+}
+
+vec3 computeLindirect(vec3 pos, vec3 theta, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
+{
+  if(depth > 3)
+    return vec3(0.0f, 0.0f, 0.0f);
+	float psi = uniform(0, 2 * PI, gen);
+	float phi = uniform(0, PI_2, gen);
+	vec3 sampleDir = angleToDirection(phi, psi, normal);
+	Ray sampleRay = Ray(pos + normal * FloatEpsilon, sampleDir);
+	float hitDistance = 0.0f;
+	vec3 hitNormal;
+	const(Scene.TriangleData)* hitData;
+	if( g_scene.trace(sampleRay, hitDistance, hitNormal, hitData)){
+		vec3 hitPos = sampleRay.get(hitDistance);
+		return (BRDF * PI * data.material.color * computeLrefl(hitPos, -sampleDir, hitNormal, hitData, gen, depth + 1));
+	}
+	return vec3(0.0f, 0.0f, 0.0f);
+}
+
+vec3 computeLdirect(vec3 x, vec3 theta, ref const(vec3) normalX, const(Scene.TriangleData)* data, 
+                    ref Random gen)
+{
+  vec3 y = pickRandomLightPoint(gen);
+  float lightDistance = (y - x).length;
+  vec3 phi = (y - x).normalize();
+
+  auto shadowRay = Ray(x + normalX * FloatEpsilon, phi); 
+
+  // compute V(x, y)
+	float distanceY = 0.0f;
+	vec3 normalY;
+	const(Scene.TriangleData)* dataY;
+  if(normalX.dot(phi) > FloatEpsilon && g_scene.trace(shadowRay, distanceY, normalY, dataY))
+  {
+    if(distanceY < lightDistance - FloatEpsilon)
+    {
+      return vec3(0.0f, 0.0f, 0.0f);
+    }
+    vec3 Le = dataY.material.emissive * dataY.material.color;
+    float G = normalX.dot(phi) * normalY.dot(-phi) / (lightDistance * lightDistance);
+    return (BRDF * data.material.color) * Le * G * g_totalLightSourceArea;
+  }
+  return vec3(0.0f, 0.0f, 0.0f);
+}
+
 void computeL(uint pixelIndex, ref Pixel pixel, ref Random gen)
 {
-	enum uint N = 5;
+	enum uint N = 2;
 	for(uint i=0; i<N; i++){
 		Ray viewRay = getViewRay(pixelIndex, gen);
 		float rayPos = 0.0f;
@@ -237,21 +330,7 @@ void computeL(uint pixelIndex, ref Pixel pixel, ref Random gen)
 
 vec3 computeL(vec3 pos, vec3 theta, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
 {
-  if(depth > 2)
-    return data.material.emissive * data.material.color; 
-	float psi = uniform(0, 2 * PI, gen);
-	float phi = uniform(0, PI_2, gen);
-	vec3 sampleDir = angleToDirection(phi, psi, normal);
-	Ray sampleRay = Ray(pos, sampleDir);
-	float hitDistance = 0.0f;
-	vec3 hitNormal;
-	const(Scene.TriangleData)* hitData;
-	if( g_scene.trace(sampleRay, hitDistance, hitNormal, hitData)){
-		vec3 hitPos = sampleRay.get(hitDistance);
-		return (data.material.emissive * data.material.color) + 
-      (BRDF * PI * data.material.color * computeL(hitPos, -sampleDir, hitNormal, hitData, gen, depth + 1));
-	}
-	return (data.material.emissive * data.material.color) + (BRDF * PI * data.material.color * sampleSky(sampleDir)); 
+  return data.material.emissive * data.material.color + computeLrefl(pos, theta, normal, data, gen, depth);
 }
 
 /**
