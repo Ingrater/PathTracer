@@ -12,6 +12,7 @@ static import core.cpuid;
 
 import sdl;
 import rendering;
+import scene;
 
 //version = PerformanceTest;
 
@@ -170,6 +171,7 @@ int main(string[] argv)
   }
 
   loadScene();
+  allocThreadLocals();
 
   //allocate one element more for sse tone mapper
   Pixel[] pixels = NewArray!Pixel(g_width * g_height + 1)[0..$-1];

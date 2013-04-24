@@ -27,6 +27,30 @@ import core.stdc.math;
 //version = UseOctree;
 //version = UseTopDown;
 
+//Thread local bufferes for the tracing algorithm
+const(Scene.Node)*[] g_readFrom;
+const(Scene.Node)*[] g_writeTo;
+
+static this()
+{
+  allocThreadLocals();
+}
+
+void allocThreadLocals()
+{
+  if(g_scene !is null && g_readFrom is null && g_writeTo is null)
+  {
+    g_readFrom = NewArray!(const(Scene.Node)*)(g_scene.m_nodes.length / 2);
+    g_writeTo = NewArray!(const(Scene.Node)*)(g_scene.m_nodes.length / 2);
+  }
+}
+
+static ~this()
+{
+  Delete(g_readFrom);
+  Delete(g_writeTo);
+}
+
 class Scene
 {
   alias void function(ref Material mat, const(char)[] materialName) MaterialFunc;
@@ -518,6 +542,7 @@ class Scene
       writefln("min-depth: %d, max-depth: %d, average-radius: %f", minDepth, maxDepth, sumRadius / numRadii);
       writefln("Building tree took %f seconds", (endTime - startTime) / 1000.0f);
     }
+    linearizeNodes();
   }
 
   ~this()
@@ -536,7 +561,71 @@ class Scene
   *  rayPos = the position on the ray where it did intersect (out = result)
   *  normal = the normal at the intersection
   */
-	bool trace(Ray ray, ref float rayPos, ref vec3 normal, ref const(TriangleData)* data) const {
+  bool trace(Ray ray, ref float rayPos, ref vec3 normal, ref const(TriangleData)* data) const {
+    rayPos = float.max;
+    auto readFrom = g_readFrom;
+    auto writeTo = g_writeTo;
+    uint nextWrite = 0;
+    uint numReads = 1;
+    readFrom[0] = m_rootNode;
+
+    bool result = false;
+
+    while(numReads > 0)
+    {
+      foreach(node; readFrom[0..numReads])
+      {
+        if(node.same || node.sphere.intersects(ray))
+        {
+          if(node.dummy is null)
+          {
+            //leaf node
+            float pos = -1.0f;
+            float u = 0.0f, v = 0.0f;
+            if( node.triangle.intersects(ray, pos, u, v) && pos < rayPos && pos >= 0.0f )
+            {
+              auto n = node.triangle.plane.normal;
+              if(n.dot(ray.dir) < 0)
+              {
+                rayPos = pos;
+                size_t index = cast(size_t)(node.triangle - m_triangles.ptr);
+                const(TriangleData*) ldata = &m_data[index];
+
+                float x = 1.0f / (u + v);
+                float u1 = x * u;
+                float v1 = x * v;
+                const float sqrt2 = 1.414213562f;
+                float d1 = sqrtf((1.0f-u1)*(1.0f-u1) + v1*v1) / sqrt2;
+                float d2 = sqrtf(u1*u1 + (1.0f-v1)*(1.0f-v1)) / sqrt2;
+                vec3 interpolated1 = ldata.n1 * d1 + ldata.n2 * d2;
+
+                float len = sqrtf(u1*u1 + v1*v1);
+                float i1 = sqrtf(u*u+v*v) / len;
+                float i2 = 1.0f - i1;
+
+                normal = ldata.n0 * i2 + interpolated1 * i1;
+                data = ldata;
+                result = true;
+              }
+            }
+          }
+          else
+          {
+            //non leaf node
+            writeTo[nextWrite++] = node.childs[0];
+            writeTo[nextWrite++] = node.childs[1];
+          }
+        }
+      }
+      numReads = nextWrite;
+      nextWrite = 0;
+      swap(writeTo, readFrom);
+    }
+
+    return result;
+  }
+
+	/+bool trace(Ray ray, ref float rayPos, ref vec3 normal, ref const(TriangleData)* data) const {
 		rayPos = float.max;
     debug {
       FloatingPointControl fpctrl;
@@ -607,7 +696,7 @@ class Scene
     }
 
 		return traceHelper(m_rootNode);
-	}
+	}+/
 
   /**
    * Computes the triangle index from a given triangle data
@@ -764,5 +853,68 @@ class Scene
     m_rootNode = &m_nodes[rootNodeIndex];
 
     file.endReading();
+  }
+
+  void linearizeNodes()
+  {
+    Node[] newNodes = NewArray!Node(m_nodes.length);
+    size_t nextNode = 0;
+
+    size_t[] nodeMapping = NewArray!size_t(m_nodes.length);
+
+    uint findMaxDepth(Node* node, uint depth)
+    {
+      if(node.dummy is null)
+        return depth;
+      return max(findMaxDepth(node.childs[0], depth+1),
+                 findMaxDepth(node.childs[1], depth+1));
+    }
+
+    uint maxDepth = findMaxDepth(m_rootNode, 0);
+
+    void writeNodeAtDepth(Node* node, uint depth, uint currentDepth)
+    {
+      if(depth == currentDepth)
+      {
+        newNodes[nextNode] = *node;
+        nodeMapping[node - m_nodes.ptr] = nextNode;
+        nextNode++;
+      }
+      else if(node.dummy !is null)
+      {
+        writeNodeAtDepth(node.childs[0], depth, currentDepth + 1);
+        writeNodeAtDepth(node.childs[1], depth, currentDepth + 1);
+      }
+    }
+
+    for(uint i=0; i <= maxDepth; i++)
+    {
+      writeNodeAtDepth(m_rootNode, i, 0);
+    }
+
+    //patch nodes
+    void patchNodePtr(ref Node* ptr)
+    {
+      if(ptr !is null)
+      {
+        auto oldIndex = ptr - m_nodes.ptr;
+        auto newIndex = nodeMapping[oldIndex];
+        ptr = &newNodes[newIndex];
+      }
+    }
+
+    foreach(ref node; newNodes[0..nextNode])
+    {
+      if(node.dummy !is null)
+      {
+        patchNodePtr(node.childs[0]);
+        patchNodePtr(node.childs[1]);
+      }
+    }
+
+    Delete(m_nodes);
+    Delete(nodeMapping);
+    m_nodes = newNodes;
+    m_rootNode = &m_nodes[0];
   }
 }
