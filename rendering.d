@@ -14,8 +14,8 @@ import thBase.container.vector;
 // global variables
 __gshared Camera g_camera;
 __gshared Scene g_scene;
-__gshared uint g_width = 640;
-__gshared uint g_height = 480;
+__gshared uint g_width = 640 / 2;
+__gshared uint g_height = 480 / 2;
 __gshared uint g_numThreads = 8;
 
 // Holds all information for a single pixel visible on the screen
@@ -45,6 +45,13 @@ struct LightTriangle
 __gshared Vector!LightTriangle g_lightTriangles;
 __gshared float g_totalLightSourceArea = 0.0f;
 
+// information about sun
+__gshared vec3 g_sunDir;
+__gshared vec3 g_sunRadiance;
+__gshared vec3 g_skyRadiance;
+__gshared bool g_hasSky = true;
+__gshared bool g_hasLights = false;
+
 // Gets called on program shutdown
 shared static ~this()
 {
@@ -57,16 +64,20 @@ shared static ~this()
 // Loads the scene and creates a camera
 void loadScene()
 {
+  g_sunDir = vec3(1, 1, 6).normalize();
+  g_sunRadiance = vec3(1.0f, 0.984f, 0.8f) * 30.0f;
+  g_skyRadiance = vec3(0.682f, 0.977f, 1.0f);
+
   g_camera = New!Camera(30.0f, cast(float)g_height / cast(float)g_width);
   
   /*g_camera.setTransform(vec3(25, 10, 20), vec3(0, 0, 0), vec3(0, 0, 1));
   g_scene = New!Scene("teapot.thModel", &fillMaterial);*/
 
-  g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
-  g_scene = New!Scene("cornell-box.thModel", &fillMaterial);
+  //g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
+  //g_scene = New!Scene("cornell-box.thModel", &fillMaterial);
 
-  //g_camera.setTransform(vec3(-660, -350, 600), vec3(-658, -349, 599.8), vec3(0, 0, 1));
-  //g_scene = New!Scene("sponza2.tree", &fillMaterial);
+  g_camera.setTransform(vec3(-660, -350, 600), vec3(-658, -349, 599.8), vec3(0, 0, 1));
+  g_scene = New!Scene("sponza2.tree", &fillMaterial);
   
   //g_camera.setTransform(vec3(0,0,0), vec3(0,0.1,1), vec3(0, 0, 1));
 
@@ -287,32 +298,69 @@ vec3 computeLindirect(vec3 pos, vec3 theta, ref const(vec3) normal, const(Scene.
 vec3 computeLdirect(vec3 x, vec3 theta, ref const(vec3) normalX, const(Scene.TriangleData)* data, 
                     ref Random gen)
 {
-  vec3 y = pickRandomLightPoint(gen);
-  float lightDistance = (y - x).length;
-  vec3 phi = (y - x).normalize();
-
-  auto shadowRay = Ray(x + normalX * FloatEpsilon, phi); 
-
-  // compute V(x, y)
-	float distanceY = 0.0f;
-	vec3 normalY;
-	const(Scene.TriangleData)* dataY;
-  if(normalX.dot(phi) > FloatEpsilon && g_scene.trace(shadowRay, distanceY, normalY, dataY))
+  vec3 L;
+  if(g_hasLights)
   {
-    if(distanceY < lightDistance - FloatEpsilon)
+    vec3 y = pickRandomLightPoint(gen);
+    float lightDistance = (y - x).length;
+    vec3 phi = (y - x).normalize();
+
+    auto shadowRay = Ray(x + normalX * FloatEpsilon, phi); 
+
+    // compute V(x, y)
+	  float distanceY = 0.0f;
+	  vec3 normalY;
+	  const(Scene.TriangleData)* dataY;
+    if(normalX.dot(phi) > FloatEpsilon && g_scene.trace(shadowRay, distanceY, normalY, dataY))
     {
-      return vec3(0.0f, 0.0f, 0.0f);
+      if(distanceY < lightDistance - FloatEpsilon)
+      {
+        return vec3(0.0f, 0.0f, 0.0f);
+      }
+      vec3 Le = dataY.material.emissive * dataY.material.color;
+      float G = normalX.dot(phi) * normalY.dot(-phi) / (lightDistance * lightDistance);
+      L = (BRDF * data.material.color) * Le * G * g_totalLightSourceArea;
     }
-    vec3 Le = dataY.material.emissive * dataY.material.color;
-    float G = normalX.dot(phi) * normalY.dot(-phi) / (lightDistance * lightDistance);
-    return (BRDF * data.material.color) * Le * G * g_totalLightSourceArea;
   }
-  return vec3(0.0f, 0.0f, 0.0f);
+  if(g_hasSky)
+  {
+    //first compute contribution of sun
+    if(normalX.dot(g_sunDir) > FloatEpsilon)
+    {
+      auto sunRay = Ray(x + normalX * FloatEpsilon, g_sunDir);
+      float distanceY = 0.0f;
+      vec3 normalY;
+      const(Scene.TriangleData)* dataY;
+      if(!g_scene.trace(sunRay, distanceY, normalY, dataY))
+      {
+        L += (BRDF * data.material.color) * g_sunRadiance * normalX.dot(g_sunDir);
+      }
+    }
+
+    // second compute contribution of sky
+    {
+      float psi = uniform(0, 2 * PI, gen);
+      float phi = uniform(0, PI_2, gen);
+      vec3 sampleDir = angleToLocalDirection(phi, psi);
+      if(normalX.dot(sampleDir) > FloatEpsilon)
+      {
+        Ray sampleRay = Ray(x + normalX * FloatEpsilon, sampleDir);
+        float hitDistance = 0.0f;
+        vec3 hitNormal;
+        const(Scene.TriangleData)* hitData;
+        if( g_scene.trace(sampleRay, hitDistance, hitNormal, hitData)){
+          vec3 hitPos = sampleRay.get(hitDistance);
+          L += (BRDF * data.material.color) * g_skyRadiance * normalX.dot(sampleDir);
+        }
+      }
+    }
+  }
+  return L;
 }
 
 void computeL(uint pixelIndex, ref Pixel pixel, ref Random gen)
 {
-	enum uint N = 20;
+	enum uint N = 5;
 	Ray viewRay = getViewRay(pixelIndex, gen);
 	float rayPos = 0.0f;
 	vec3 normal;
