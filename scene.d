@@ -595,12 +595,12 @@ class Scene
                 float u1 = x * u;
                 float v1 = x * v;
                 const float sqrt2 = 1.414213562f;
-                float d1 = sqrtf((1.0f-u1)*(1.0f-u1) + v1*v1) / sqrt2;
-                float d2 = sqrtf(u1*u1 + (1.0f-v1)*(1.0f-v1)) / sqrt2;
+                float d1 = fastsqrt((1.0f-u1)*(1.0f-u1) + v1*v1) / sqrt2;
+                float d2 = fastsqrt(u1*u1 + (1.0f-v1)*(1.0f-v1)) / sqrt2;
                 vec3 interpolated1 = ldata.n1 * d1 + ldata.n2 * d2;
 
-                float len = sqrtf(u1*u1 + v1*v1);
-                float i1 = sqrtf(u*u+v*v) / len;
+                float len = fastsqrt(u1*u1 + v1*v1);
+                float i1 = fastsqrt(u*u+v*v) / len;
                 float i2 = 1.0f - i1;
 
                 normal = ldata.n0 * i2 + interpolated1 * i1;
