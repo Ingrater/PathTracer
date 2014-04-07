@@ -134,7 +134,7 @@ public:
       throw New!RCException(format("File '%s' does not exist", pFilename[]));
     }
 
-    auto file = scopedRef!(Chunkfile)(New!Chunkfile(pFilename, Chunkfile.Operation.Read));
+    auto file = scopedRef!(Chunkfile)(pFilename, Chunkfile.Operation.Read);
 
     if(file.startReading("thModel") != thResult.SUCCESS)
     {

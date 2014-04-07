@@ -217,8 +217,8 @@ class Scene
             {
               dir = vec3(0,1,0);
             }
-            auto right = up.cross(dir).normalize();
-            dir = up.cross(right).normalize();
+            auto right = up.cross(dir).normalized();
+            dir = up.cross(right).normalized();
             d.localToWorld = mat3(dir, right, up);
           }
           currentFaceCount += mesh.faces.length;
@@ -280,7 +280,7 @@ class Scene
             float radiusB = nodeB.sphere.radius;
             vec3 rayThroughSpheres = nodeB.sphere.pos - nodeA.sphere.pos;
             float dist = rayThroughSpheres.length;
-            rayThroughSpheres = rayThroughSpheres.normalize();
+            rayThroughSpheres = rayThroughSpheres.normalized();
             newNode.sphere.pos = ((nodeA.sphere.pos - (rayThroughSpheres * radiusA)) + (nodeB.sphere.pos + (rayThroughSpheres * radiusB))) * 0.5f;
             float newRadius = (radiusA + dist + radiusB) * 0.5f + 0.01f;
             newNode.sphere.radiusSquared = newRadius * newRadius;
@@ -582,7 +582,7 @@ class Scene
             //leaf node
             float pos = -1.0f;
             float u = 0.0f, v = 0.0f;
-            if( node.triangle.intersects(ray, pos, u, v) && pos < rayPos && pos >= 0.0f )
+            if( node.triangle.intersects(ray, pos, u, v) && pos < rayPos && pos >= FloatEpsilon )
             {
               auto n = node.triangle.plane.normal;
               if(n.dot(ray.dir) < 0)
@@ -623,6 +623,48 @@ class Scene
     }
 
     return result;
+  }
+
+  /**
+   * tests if the ray hits no geometry
+   */
+  bool hitsNothing(Ray ray) const {
+    auto readFrom = g_readFrom;
+    auto writeTo = g_writeTo;
+    uint nextWrite = 0;
+    uint numReads = 1;
+    readFrom[0] = m_rootNode;
+
+    while(numReads > 0)
+    {
+      foreach(node; readFrom[0..numReads])
+      {
+        if(node.same || node.sphere.intersects(ray))
+        {
+          if(node.dummy is null)
+          {
+            //leaf node
+            float pos = -1.0f;
+            float u = 0.0f, v = 0.0f;
+            if( node.triangle.intersects(ray, pos, u, v) && pos >= FloatEpsilon )
+            {
+              return false;
+            }
+          }
+          else
+          {
+            //non leaf node
+            writeTo[nextWrite++] = node.childs[0];
+            writeTo[nextWrite++] = node.childs[1];
+          }
+        }
+      }
+      numReads = nextWrite;
+      nextWrite = 0;
+      swap(writeTo, readFrom);
+    }
+
+    return true;
   }
 
 	/+bool trace(Ray ray, ref float rayPos, ref vec3 normal, ref const(TriangleData)* data) const {
@@ -728,7 +770,7 @@ class Scene
    */
   void saveTree(const(char)[] filename)
   {
-    auto outFile = scopedRef!Chunkfile(New!Chunkfile(rcstring(filename), Chunkfile.Operation.Write, Chunkfile.DebugMode.Off ));
+    auto outFile = scopedRef!Chunkfile(rcstring(filename), Chunkfile.Operation.Write, Chunkfile.DebugMode.Off);
     outFile.startWriting("tree", 1);
     scope(exit) outFile.endWriting();
 
@@ -776,7 +818,7 @@ class Scene
 
   private void loadTree(const(char)[] filename, MaterialFunc matFunc)
   {
-    auto file = scopedRef!(Chunkfile)(New!Chunkfile(rcstring(filename), Chunkfile.Operation.Read));
+    auto file = scopedRef!(Chunkfile)(rcstring(filename), Chunkfile.Operation.Read);
     if(file.startReading("tree") != thResult.SUCCESS)
     {
       throw New!RCException(format("File '%s' is not a tree format", filename));

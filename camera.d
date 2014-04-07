@@ -23,9 +23,9 @@ class Camera
     {
       m_pos = from;
 
-      m_dir = (to - from).normalize();
-      m_right = up.cross(m_dir).normalize();
-      m_up = m_right.cross(m_dir).normalize();
+      m_dir = (to - from).normalized();
+      m_right = up.cross(m_dir).normalized();
+      m_up = m_right.cross(m_dir).normalized();
     }
 
     /**
@@ -37,7 +37,7 @@ class Camera
      */
     Ray getScreenRay(float x, float y)
     {
-      vec3 rayDir = (m_dir + m_right * x * m_tanFov + m_up * y * m_tanFov * m_aspectRatio).normalize();
+      vec3 rayDir = (m_dir + m_right * x * m_tanFov + m_up * y * m_tanFov * m_aspectRatio).normalized();
       return Ray(m_pos, rayDir);
     }
 }

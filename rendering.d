@@ -14,8 +14,8 @@ import thBase.container.vector;
 // global variables
 __gshared Camera g_camera;
 __gshared Scene g_scene;
-__gshared uint g_width = 640 / 2;
-__gshared uint g_height = 480 / 2;
+__gshared uint g_width = 640;
+__gshared uint g_height = 480;
 __gshared uint g_numThreads = 8;
 
 // Holds all information for a single pixel visible on the screen
@@ -64,8 +64,8 @@ shared static ~this()
 // Loads the scene and creates a camera
 void loadScene()
 {
-  g_sunDir = vec3(1, 1, 6).normalize();
-  g_sunRadiance = vec3(1.0f, 0.984f, 0.8f) * 30.0f;
+  g_sunDir = vec3(1, 1, 3).normalized();
+  g_sunRadiance = vec3(1.0f, 0.984f, 0.8f) * 10.0f;
   g_skyRadiance = vec3(0.682f, 0.977f, 1.0f);
 
   g_camera = New!Camera(30.0f, cast(float)g_height / cast(float)g_width);
@@ -226,14 +226,14 @@ vec3 angleToDirection(float phi, float psi, ref const(vec3) normal)
   {
     dir = vec3(0,1,0);
   }
-  auto right = up.cross(dir).normalize();
-  dir = up.cross(right).normalize();
+  auto right = up.cross(dir).normalized();
+  dir = up.cross(right).normalized();
   return mat3(dir, right, up) * localDir;
 }
 
 vec3 sampleSky(vec3 dir)
 {
-  auto sunDir = vec3(1, 1, 6).normalize();
+  auto sunDir = vec3(1, 1, 6).normalized();
   float dot = sunDir.dot(dir);
   if(dot > 0.997f)
     return vec3(1.0f, 0.984f, 0.8f) * 30.0f;
@@ -284,7 +284,7 @@ vec3 computeLindirect(vec3 pos, vec3 theta, ref const(vec3) normal, const(Scene.
 	float psi = uniform(0, 2 * PI, gen);
 	float phi = uniform(0, PI_2, gen);
 	vec3 sampleDir = angleToDirection(phi, psi, normal);
-	Ray sampleRay = Ray(pos + normal * FloatEpsilon, sampleDir);
+	Ray sampleRay = Ray(pos + normal * 0.1f, sampleDir);
 	float hitDistance = 0.0f;
 	vec3 hitNormal;
 	const(Scene.TriangleData)* hitData;
@@ -303,7 +303,7 @@ vec3 computeLdirect(vec3 x, vec3 theta, ref const(vec3) normalX, const(Scene.Tri
   {
     vec3 y = pickRandomLightPoint(gen);
     float lightDistance = (y - x).length;
-    vec3 phi = (y - x).normalize();
+    vec3 phi = (y - x).normalized();
 
     auto shadowRay = Ray(x + normalX * FloatEpsilon, phi); 
 
@@ -325,15 +325,18 @@ vec3 computeLdirect(vec3 x, vec3 theta, ref const(vec3) normalX, const(Scene.Tri
   if(g_hasSky)
   {
     //first compute contribution of sun
-    if(normalX.dot(g_sunDir) > FloatEpsilon)
     {
-      auto sunRay = Ray(x + normalX * FloatEpsilon, g_sunDir);
-      float distanceY = 0.0f;
-      vec3 normalY;
-      const(Scene.TriangleData)* dataY;
-      if(!g_scene.trace(sunRay, distanceY, normalY, dataY))
+      float psi = uniform(0, 2 * PI, gen);
+      float phi = uniform(PI_2 - PI_2 * 0.01f, PI_2, gen);
+      vec3 sampleDir = angleToDirection(phi, psi, g_sunDir);
+      if(normalX.dot(sampleDir) > FloatEpsilon)
       {
-        L += (BRDF * data.material.color) * g_sunRadiance * normalX.dot(g_sunDir);
+
+        auto sunRay = Ray(x + normalX * 0.1f, sampleDir);
+        if(g_scene.hitsNothing(sunRay))
+        {
+          L += (BRDF * data.material.color) * g_sunRadiance * normalX.dot(g_sunDir);
+        }
       }
     }
 
@@ -344,12 +347,8 @@ vec3 computeLdirect(vec3 x, vec3 theta, ref const(vec3) normalX, const(Scene.Tri
       vec3 sampleDir = angleToLocalDirection(phi, psi);
       if(normalX.dot(sampleDir) > FloatEpsilon)
       {
-        Ray sampleRay = Ray(x + normalX * FloatEpsilon, sampleDir);
-        float hitDistance = 0.0f;
-        vec3 hitNormal;
-        const(Scene.TriangleData)* hitData;
-        if( g_scene.trace(sampleRay, hitDistance, hitNormal, hitData)){
-          vec3 hitPos = sampleRay.get(hitDistance);
+        Ray sampleRay = Ray(x + normalX * 0.1f, sampleDir);
+        if(g_scene.hitsNothing(sampleRay)){
           L += (BRDF * data.material.color) * g_skyRadiance * normalX.dot(sampleDir);
         }
       }

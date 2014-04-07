@@ -6,6 +6,7 @@ import thBase.math;
 import thBase.asserthandler;
 import thBase.timer;
 import thBase.task;
+import thBase.file;
 import core.thread;
 import core.stdc.math;
 static import core.cpuid;
@@ -106,7 +107,6 @@ class ComputeOutputTask : Task
     uint m_pixelOffset;
     Pixel[] m_pixels;
     Random m_gen;
-    uint m_run;
 
   public:
     this(TaskIdentifier identifier, uint pixelOffset, Pixel[] pixels)
@@ -114,13 +114,11 @@ class ComputeOutputTask : Task
       super(identifier);
       m_pixelOffset = pixelOffset;
       m_pixels = pixels;
-      m_run = 0;
+      m_gen.seed(m_pixelOffset + cast(uint)pixels[0].n);
     }
 
     override void Execute()
     {
-      m_gen.seed(m_pixelOffset + m_run);
-      m_run += 1337;
       computeOutputColor(m_pixelOffset, m_pixels, m_gen);
     }
 
@@ -226,9 +224,19 @@ int main(string[] argv)
 
   float totalTime = 0.0f;
 
+  {
+    auto projectFile = RawFile("sponza.project", "rb");
+    if(projectFile.isOpen())
+    {
+      projectFile.readArray(pixels);
+      writefln("project file loaded");
+    }
+  }
+
   auto startRendering = Zeitpunkt(timer);
   auto startPass = startRendering;
-  while(g_run)
+  bool run = true;
+  while(run)
   {
     // one time rendering
     version(PerformanceTest)
@@ -298,7 +306,7 @@ int main(string[] argv)
       switch (event.type) 
       {
         case SDL.QUIT:
-          g_run = false;
+          run = false;
           break;
         /*case SDL.KEYDOWN:
           run = false;
@@ -308,6 +316,11 @@ int main(string[] argv)
     }
   }
 
+  while(!taskIdentifier.allFinished)
+    g_localTaskQueue.executeOneTask();
+
+  g_run = false;
+
   foreach(worker; workers)
   {
     worker.join(false);
@@ -316,6 +329,16 @@ int main(string[] argv)
   auto endRendering = Zeitpunkt(timer);
   SDL.Quit();
   writefln("Rendering took %f seconds", (endRendering - startRendering) / 1000.0f);
+
+  {
+    auto projectFile = RawFile("sponza.project", "wb");
+    if(projectFile.isOpen())
+    {
+      projectFile.writeArray(pixels);
+    }
+    writefln("written project file");
+  }
+
   core.stdc.stdlib.system("pause");
 
   return 0;
