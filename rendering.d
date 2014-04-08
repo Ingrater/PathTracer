@@ -14,8 +14,8 @@ import thBase.container.vector;
 // global variables
 __gshared Camera g_camera;
 __gshared Scene g_scene;
-__gshared uint g_width = 640;
-__gshared uint g_height = 480;
+__gshared uint g_width = 128;
+__gshared uint g_height = 128;
 __gshared uint g_numThreads = 8;
 
 // Holds all information for a single pixel visible on the screen
@@ -23,8 +23,12 @@ struct Pixel
 {
   vec3 color; //resulting pixel color. Each component has to be in the range [0,1]
   // Define additional per pixel values here
+  vec3 normal;   // normal in world space
+  vec3 position; // position in world space 
   float n = 0.0f;
   vec3 sum;
+  vec2[64] samples;
+  bool rastered = false;
 };
 
 // Holds all information about a material
@@ -69,28 +73,12 @@ void loadScene()
   g_skyRadiance = vec3(0.682f, 0.977f, 1.0f);
 
   g_camera = New!Camera(30.0f, cast(float)g_height / cast(float)g_width);
-  
-  /*g_camera.setTransform(vec3(25, 10, 20), vec3(0, 0, 0), vec3(0, 0, 1));
-  g_scene = New!Scene("teapot.thModel", &fillMaterial);*/
-
-  //g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
-  //g_scene = New!Scene("cornell-box.thModel", &fillMaterial);
 
   g_camera.setTransform(vec3(-660, -350, 600), vec3(-658, -349, 599.8), vec3(0, 0, 1));
-  g_scene = New!Scene("sponza2.tree", &fillMaterial);
-  
-  //g_camera.setTransform(vec3(0,0,0), vec3(0,0.1,1), vec3(0, 0, 1));
-
-  //g_scene.saveTree("sponza3.tree");
-
-  /*g_camera.setTransform(vec3(-1, 0, 7), vec3(0, 0, 7), vec3(0, 0, 1));
-  g_scene = New!Scene("sponza2.thModel", &fillMaterial);*/
-
-  /*g_camera.setTransform(vec3(3, 3, 3), vec3(0, 0, 0), vec3(0, 0, 1));
-  g_scene = New!Scene("chest1.thModel";)*/
+  g_scene = New!Scene("cornell-box-textured.thModel", &fillMaterial);
 
   //find all light triangles
-  auto lightTriangles = New!(Vector!LightTriangle)();
+  /*auto lightTriangles = New!(Vector!LightTriangle)();
   foreach(size_t i, ref triangleData; g_scene.triangleData)
   {
     if(triangleData.material !is null && triangleData.material.emissive > 0.0f)
@@ -111,7 +99,7 @@ void loadScene()
     light.probability = light.area / g_totalLightSourceArea;
   }
   g_lightTriangles = lightTriangles;
-  writefln("Scene has %d light triangles", lightTriangles.length);
+  writefln("Scene has %d light triangles", lightTriangles.length);*/
 }
 
 vec3 pickRandomLightPoint(ref Random gen)

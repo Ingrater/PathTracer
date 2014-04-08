@@ -7,9 +7,14 @@ import thBase.asserthandler;
 import thBase.timer;
 import thBase.task;
 import thBase.file;
+import thBase.math3d.all;
+import thBase.algorithm;
+import thBase.dds;
+import thBase.format;
 import core.thread;
-import core.stdc.math;
 static import core.cpuid;
+
+import std.math;
 
 import sdl;
 import rendering;
@@ -33,7 +38,7 @@ void drawScreen(SDL.Surface* screen, Pixel[] pixels)
   immutable(float) a = 0.055f;
   immutable(float) aPlusOne = 1 + 0.055f;
   immutable(float) power = 1 / 2.4f;
-  version(USE_SSE)
+  /*version(USE_SSE)
   {
     float one = 1.0f;
     float zero = 0.0f;
@@ -77,7 +82,7 @@ void drawScreen(SDL.Surface* screen, Pixel[] pixels)
       }
     }
   }
-  else
+  else*/
   {
     for(int y = 0; y < screen.height; y++ ) 
     {
@@ -87,9 +92,9 @@ void drawScreen(SDL.Surface* screen, Pixel[] pixels)
         float r = saturate(p.color.x);
         float g = saturate(p.color.y);
         float b = saturate(p.color.z);
-        r = (r <= 0.0031308f) ? r * 12.92f : aPlusOne * powf(r, power) - a;
-        g = (g <= 0.0031308f) ? g * 12.92f : aPlusOne * powf(g, power) - a;
-        b = (b <= 0.0031308f) ? b * 12.92f : aPlusOne * powf(b, power) - a;
+        //r = (r <= 0.0031308f) ? r * 12.92f : aPlusOne * powf(r, power) - a;
+        //g = (g <= 0.0031308f) ? g * 12.92f : aPlusOne * powf(g, power) - a;
+        //b = (b <= 0.0031308f) ? b * 12.92f : aPlusOne * powf(b, power) - a;
         setPixel(screen, x, y, cast(ubyte)(r * 255.0f), cast(ubyte)(g * 255.0f), cast(ubyte)(b * 255.0f));
       }
     }
@@ -139,6 +144,244 @@ class Worker : Thread
   }
 }
 
+auto interpolate(T)(float u, float v, T val0, T val1, T val2)
+{
+  float x = 1.0f / (u + v);
+  float u1 = x * u;
+  float v1 = x * v;
+  immutable float sqrt2 = 1.414213562f;
+  float d1 = fastsqrt((1.0f-u1)*(1.0f-u1) + v1*v1) / sqrt2;
+  float d2 = fastsqrt(u1*u1 + (1.0f-v1)*(1.0f-v1)) / sqrt2;
+  auto interpolated1 = val1 * d1 + val2 * d2;
+
+  float len = fastsqrt(u1*u1 + v1*v1);
+  float i1 = fastsqrt(u*u+v*v) / len;
+  float i2 = 1.0f - i1;
+
+  return val0 * i2 + interpolated1 * i1;
+}
+
+struct Edge
+{
+  uint minY, maxY;
+  float xs; // intersection with the current scanline
+  float invM;
+  vec2 uvDelta;
+  vec2 uv;
+
+  this(float x1, float y1, vec2 uv1, float x2, float y2, vec2 uv2)
+  {
+    uvDelta = (uv2 - uv1) / (y2 - y1);
+    x1 = floor(x1);
+    y1 = floor(y1);
+    x2 = floor(x2);
+    y2 = floor(y2);
+    assert(!epsilonCompare(y1, y2));
+
+    if(y1 < y2)
+    {
+      minY = cast(uint)y1;
+      maxY = cast(uint)y2;
+      uv = uv1;
+    }
+    else
+    {
+      minY = cast(uint)y2;
+      maxY = cast(uint)y1;
+      uv = uv2;
+    }
+
+    float deltaX = (x2 - x1);
+    if(epsilonCompare(deltaX, 0.0f))
+    {
+      xs = x1;
+      invM = 0.0f;
+    }
+    else
+    {
+      auto m = (y2 - y1) / deltaX;
+      invM = 1.0f / m;
+      float b = y1 - (m * x1);
+      xs = round((minY - b) * invM);
+    }
+  }
+}
+
+void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
+{
+  float fHeight = cast(float)g_height;
+  float fWidth = cast(float)g_width;
+
+  foreach(size_t i, ref t; g_scene.triangleData[from..to])
+  {
+    auto triangle = &g_scene.triangles[i + from];
+    vec2[3] verts;
+    verts[] = t.tex[];
+
+    vec2 vU = verts[1] - verts[0];
+    vec2 vV = verts[2] - verts[0];
+
+    vec2[3] uvs;
+    uvs[0] = vec2(0.0f, 0.0f);
+    uvs[1] = vec2(0.0f, 1.0f);
+    uvs[2] = vec2(1.0f, 0.0f);
+
+    uint[3] swizzle = [0, 1, 2];
+    vec3[3] wsPos = [ triangle.v0, triangle.v1, triangle.v2 ];
+
+    if(verts[0].y > verts[1].y)
+    {
+      swap(verts[0], verts[1]);
+      swap(uvs[0], uvs[1]);
+      swap(swizzle[0], swizzle[1]);
+    }
+    if(verts[0].y > verts[2].y)
+    {
+      swap(verts[1], verts[2]);
+      swap(verts[0], verts[1]);
+      swap(uvs[1], uvs[2]);
+      swap(uvs[0], uvs[1]);
+      swap(swizzle[1], swizzle[2]);
+      swap(swizzle[0], swizzle[1]);
+    }
+    else if(verts[1].y > verts[2].y)
+    {
+      swap(verts[1], verts[2]);
+      swap(uvs[1], uvs[2]);
+      swap(swizzle[1], swizzle[2]);
+    }
+
+    Edge[3] edges;
+    uint numEdges = 0;
+
+    /*vU = vec2(vU.x * fWidth, vU.y * fHeight);
+    vV = vec2(vV.x * fWidth, vV.y * fHeight);
+    vec2 uvDelta = vec2(vU.x / vU.dot(vU), vV.x / vV.dot(vV));*/
+
+    if(cast(uint)(verts[0].y * fHeight) != cast(uint)(verts[1].y * fHeight))
+    {
+      edges[numEdges++] = Edge(verts[0].x * fWidth, verts[0].y * fHeight, uvs[0], verts[1].x * fWidth, verts[1].y * fHeight, uvs[1]);
+      edges[numEdges++] = Edge(verts[0].x * fWidth, verts[0].y * fHeight, uvs[0], verts[2].x * fWidth, verts[2].y * fHeight, uvs[2]);
+      if(cast(uint)(verts[1].y * fHeight) != cast(uint)(verts[2].y * fHeight))
+      {
+        edges[numEdges++] = Edge(verts[1].x * fWidth, verts[1].y * fHeight, uvs[1], verts[2].x * fWidth, verts[2].y * fHeight, uvs[2]);
+      }
+    }
+    else
+    {
+      edges[numEdges++] = Edge(verts[0].x * fWidth, verts[0].y * fHeight, uvs[0], verts[2].x * fWidth, verts[2].y * fHeight, uvs[2]);
+      edges[numEdges++] = Edge(verts[1].x * fWidth, verts[1].y * fHeight, uvs[1], verts[2].x * fWidth, verts[2].y * fHeight, uvs[2]);
+    }
+
+    if(edges[0].xs > edges[1].xs || (epsilonCompare(edges[0].xs,edges[1].xs) && edges[0].invM > edges[1].invM))
+      swap(edges[0], edges[1]);
+    for(uint y = edges[0].minY; true; y++)
+    {
+      if(edges[0].maxY <= y)
+      {
+        if(numEdges < 3)
+          break;
+        numEdges--;
+        edges[2].xs += edges[2].invM * (edges[2].minY - y);
+        swap(edges[0], edges[2]);
+        if(edges[0].xs > edges[1].xs || (epsilonCompare(edges[0].xs,edges[1].xs) && edges[0].invM > edges[1].invM))
+          swap(edges[0], edges[1]);
+      }
+      else if(edges[1].maxY <= y)
+      {
+        if(numEdges < 3)
+          break;
+        numEdges--;
+        edges[2].xs += edges[2].invM * (edges[2].minY - y);
+        swap(edges[1], edges[2]);
+        if(edges[0].xs > edges[1].xs || (epsilonCompare(edges[0].xs,edges[1].xs) && edges[0].invM > edges[1].invM))
+          swap(edges[0], edges[1]);
+      }
+      //assert(edges[0].xs <= edges[1].xs);
+      uint end = cast(uint)edges[1].xs;
+      if(end >= g_width)
+        end = g_width;
+      uint start = cast(uint)(edges[0].xs < 0.0f ? 0.0f : edges[0].xs);
+      vec2 uv = edges[0].uv;
+      vec2 uvDelta = (edges[1].uv - edges[0].uv) / cast(float)(end - start + 1);
+      for(uint x = start; x < end; x++)
+      {
+        uv += uvDelta;
+        auto curPixel = &pixels[y * g_width + x];
+        curPixel.rastered = true;
+        curPixel.position = interpolate(uv.x, uv.y, wsPos[0], wsPos[1], wsPos[2]);
+        curPixel.normal = interpolate(uv.x, uv.y, t.n[0], t.n[1], t.n[2]);
+        vec2 coords = interpolate(uv.x, uv.y, t.tex[0], t.tex[1], t.tex[2]);
+        //curPixel.color = curPixel.position * (1.0f / 20.0f) + vec3(0.5f);
+        //curPixel.color = vec3(coords.x, coords.y, 0.0f);
+        //curPixel.color = vec3(uv.x, uv.y, 0.0f);
+        curPixel.color = curPixel.normal * 0.5f + vec3(0.5f);
+        
+      }
+      edges[0].xs += edges[0].invM;
+      edges[0].uv += edges[0].uvDelta;
+      edges[1].xs += edges[1].invM;
+      edges[1].uv += edges[1].uvDelta;
+    }
+  }
+}
+
+void takeSamples(Pixel[] pixels, ref Random gen)
+{
+  foreach(ref pixel; pixels)
+  {
+    if(!pixel.rastered)
+      continue;
+    size_t numFails=0;
+    for(size_t i=0; i<pixel.samples.length && numFails < 8;)
+    {
+	    float psi = uniform(0, 2 * PI, gen);
+	    float phi = uniform(0, PI_2, gen);
+	    vec3 sampleDir = angleToDirection(phi, psi, pixel.normal);
+	    Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
+	    float hitDistance = 0.0f;
+	    vec2 hitTexcoords;
+	    const(Scene.TriangleData)* hitData;
+	    if( g_scene.trace(sampleRay, hitDistance, hitTexcoords, hitData))
+      {
+		    pixel.samples[i++] = hitTexcoords;
+        if(i==1)
+        {
+          pixel.color = vec3(hitTexcoords.x, hitTexcoords.y, 0.0f);
+        }
+	    }
+      else
+      {
+        numFails++;
+      }
+    }
+  }
+}
+
+void writeDDSFiles(uint width, uint height, Pixel[] pixels)
+{
+  auto data = NewArray!ushort(width * height * 4);
+  scope(exit) Delete(data);
+  uint numFiles = (Pixel.samples.length + 1) / 2;
+  for(uint i=0; i<numFiles; i++)
+  {
+    for(uint y=0; y<width; y++)
+    {
+      for(uint x=0; x<width; x++)
+      {
+        data[y * width * 4 + x * 4] = cast(ushort)(pixels[y * width + x].samples[i*2].x * 65535.0f);
+        data[y * width * 4 + x * 4 + 1] = cast(ushort)(pixels[y * width + x].samples[i*2].y * 65535.0f);
+        data[y * width * 4 + x * 4 + 2] = cast(ushort)(pixels[y * width + x].samples[i*2+1].x * 65535.0f);
+        data[y * width * 4 + x * 4 + 3] = cast(ushort)(pixels[y * width + x].samples[i*2+1].y * 65535.0f);
+      }
+    }
+    char[256] name;
+    auto len = formatStatic(name, "gi%d.dds", i);
+    WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R16G16B16A16_UNORM, (cast(void*)data.ptr)[0..(width * height * 4 * ushort.sizeof)]);
+    writefln("%s written", name[0..len]);
+  }
+}
+
 int main(string[] argv)
 {
   version(USE_SSE)
@@ -175,12 +418,24 @@ int main(string[] argv)
   Pixel[] pixels = NewArray!Pixel(g_width * g_height + 1)[0..$-1];
   scope(exit) Delete(pixels);
 
+  //rasterTriangles(39, 40, pixels);
+  //rasterTriangles(2, 4, pixels);
+  rasterTriangles(0, g_scene.triangles.length, pixels);
+  drawScreen(screen, pixels);
+
+  
+
   int h = 0;
   SDL.Event event;
 
   Random gen;
 
-  uint progress = 0;
+  takeSamples(pixels, gen);
+  drawScreen(screen, pixels);
+
+  writeDDSFiles(g_width, g_height, pixels);
+
+  /*uint progress = 0;
   uint step = g_width * 4;
   uint steps = cast(uint)(pixels.length / step);
   ComputeOutputTask[] tasks = NewArray!ComputeOutputTask(steps);
@@ -217,21 +472,12 @@ int main(string[] argv)
   {
     if(g_numThreads > 1)
       Delete(workers);
-  }
+  }*/
 
   auto timer = cast(shared(Timer))New!Timer();
   scope(exit) Delete(timer);
 
   float totalTime = 0.0f;
-
-  {
-    auto projectFile = RawFile("sponza.project", "rb");
-    if(projectFile.isOpen())
-    {
-      projectFile.readArray(pixels);
-      writefln("project file loaded");
-    }
-  }
 
   auto startRendering = Zeitpunkt(timer);
   auto startPass = startRendering;
@@ -239,7 +485,7 @@ int main(string[] argv)
   while(run)
   {
     // one time rendering
-    version(PerformanceTest)
+    /++version(PerformanceTest)
     {
       if(progress < steps)
       {
@@ -299,7 +545,7 @@ int main(string[] argv)
           g_localTaskQueue.executeOneTask();  
         }
       }*/
-    }
+    }++/
 
     while(SDL.PollEvent(&event)) 
     {      
@@ -316,7 +562,7 @@ int main(string[] argv)
     }
   }
 
-  while(!taskIdentifier.allFinished)
+  /*while(!taskIdentifier.allFinished)
     g_localTaskQueue.executeOneTask();
 
   g_run = false;
@@ -324,20 +570,11 @@ int main(string[] argv)
   foreach(worker; workers)
   {
     worker.join(false);
-  }
+  }*/
 
   auto endRendering = Zeitpunkt(timer);
   SDL.Quit();
   writefln("Rendering took %f seconds", (endRendering - startRendering) / 1000.0f);
-
-  {
-    auto projectFile = RawFile("sponza.project", "wb");
-    if(projectFile.isOpen())
-    {
-      projectFile.writeArray(pixels);
-    }
-    writefln("written project file");
-  }
 
   core.stdc.stdlib.system("pause");
 

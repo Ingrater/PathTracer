@@ -24,7 +24,9 @@ import thBase.string;
 import std.math;
 import core.stdc.math;
 
-//version = UseOctree;
+import main : interpolate;
+
+version = UseOctree;
 //version = UseTopDown;
 
 //Thread local bufferes for the tracing algorithm
@@ -89,9 +91,10 @@ class Scene
   // Data stored for each triangle
   static struct TriangleData
   {
-    vec3 n0, n1, n2; // the normals at the three vertices of the triangle
+    vec3[3] n; // the normals at the three vertices of the triangle
     Material* material; // the material of the triangle
     mat3 localToWorld; // triangle space to world space transformation matrix
+    vec2[3] tex; // the texture coordinates at the three vertices of the trignale
   }
 
   Triangle[] m_triangles;
@@ -206,10 +209,13 @@ class Scene
 
           foreach(size_t i, ref d; data)
           {
-            d.n0 = normals[mesh.faces[i].indices[0]];
-            d.n1 = normals[mesh.faces[i].indices[1]];
-            d.n2 = normals[mesh.faces[i].indices[2]];
+            d.n[0] = normals[mesh.faces[i].indices[0]];
+            d.n[1] = normals[mesh.faces[i].indices[1]];
+            d.n[2] = normals[mesh.faces[i].indices[2]];
             d.material = &m_materials[mesh.materialIndex];
+            d.tex[0] = mesh.texcoords[0][mesh.faces[i].indices[0]];
+            d.tex[1] = mesh.texcoords[0][mesh.faces[i].indices[1]];
+            d.tex[2] = mesh.texcoords[0][mesh.faces[i].indices[2]];
 
             auto up = triangles[i].plane.normal;
             auto dir = vec3(1,0,0);
@@ -597,13 +603,65 @@ class Scene
                 const float sqrt2 = 1.414213562f;
                 float d1 = fastsqrt((1.0f-u1)*(1.0f-u1) + v1*v1) / sqrt2;
                 float d2 = fastsqrt(u1*u1 + (1.0f-v1)*(1.0f-v1)) / sqrt2;
-                vec3 interpolated1 = ldata.n1 * d1 + ldata.n2 * d2;
+                vec3 interpolated1 = ldata.n[1] * d1 + ldata.n[2] * d2;
 
                 float len = fastsqrt(u1*u1 + v1*v1);
                 float i1 = fastsqrt(u*u+v*v) / len;
                 float i2 = 1.0f - i1;
 
-                normal = ldata.n0 * i2 + interpolated1 * i1;
+                normal = ldata.n[0] * i2 + interpolated1 * i1;
+                data = ldata;
+                result = true;
+              }
+            }
+          }
+          else
+          {
+            //non leaf node
+            writeTo[nextWrite++] = node.childs[0];
+            writeTo[nextWrite++] = node.childs[1];
+          }
+        }
+      }
+      numReads = nextWrite;
+      nextWrite = 0;
+      swap(writeTo, readFrom);
+    }
+
+    return result;
+  }
+
+  bool trace(Ray ray, ref float rayPos, ref vec2 texcoords, ref const(TriangleData)* data) const 
+  {
+    rayPos = float.max;
+    auto readFrom = g_readFrom;
+    auto writeTo = g_writeTo;
+    uint nextWrite = 0;
+    uint numReads = 1;
+    readFrom[0] = m_rootNode;
+
+    bool result = false;
+
+    while(numReads > 0)
+    {
+      foreach(node; readFrom[0..numReads])
+      {
+        if(node.same || node.sphere.intersects(ray))
+        {
+          if(node.dummy is null)
+          {
+            //leaf node
+            float pos = -1.0f;
+            float u = 0.0f, v = 0.0f;
+            if( node.triangle.intersects(ray, pos, u, v) && pos < rayPos && pos >= FloatEpsilon )
+            {
+              auto n = node.triangle.plane.normal;
+              if(n.dot(ray.dir) < 0)
+              {
+                rayPos = pos;
+                size_t index = cast(size_t)(node.triangle - m_triangles.ptr);
+                const(TriangleData*) ldata = &m_data[index];
+                texcoords = interpolate(u, v, ldata.tex[0], ldata.tex[1], ldata.tex[2]);
                 data = ldata;
                 result = true;
               }
@@ -784,9 +842,9 @@ class Scene
     outFile.write(m_triangles);
     foreach(ref data; m_data)
     {
-      outFile.write(data.n0);
-      outFile.write(data.n1);
-      outFile.write(data.n2);
+      outFile.write(data.n[0]);
+      outFile.write(data.n[1]);
+      outFile.write(data.n[2]);
       assert(data.material != null);
       uint materialIndex = int_cast!uint(data.material - m_materials.ptr);
       assert(materialIndex < m_materials.length);
@@ -852,9 +910,9 @@ class Scene
     m_data = NewArray!TriangleData(numTriangles);
     foreach(ref data; m_data)
     {
-      file.read(data.n0);
-      file.read(data.n1);
-      file.read(data.n2);
+      file.read(data.n[0]);
+      file.read(data.n[1]);
+      file.read(data.n[2]);
       uint materialIndex;
       file.read(materialIndex);
       data.material = &m_materials[materialIndex];
