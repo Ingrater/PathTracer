@@ -15,6 +15,8 @@ import core.thread;
 static import core.cpuid;
 
 import std.math;
+import core.stdc.math : cosf, sinf;
+import core.stdc.stdlib;
 
 import sdl;
 import rendering;
@@ -124,7 +126,8 @@ class ComputeOutputTask : Task
 
     override void Execute()
     {
-      computeOutputColor(m_pixelOffset, m_pixels, m_gen);
+      //computeOutputColor(m_pixelOffset, m_pixels, m_gen);
+      takeSamples(m_pixels, m_gen);
     }
 
     override void OnTaskFinished() {}
@@ -159,6 +162,53 @@ auto interpolate(T)(float u, float v, T val0, T val1, T val2)
   float i2 = 1.0f - i1;
 
   return val0 * i2 + interpolated1 * i1;
+}
+
+float g_cylinderRadius = 0.50f;
+
+vec3 mapToCylinder(vec2 p)
+{
+  return vec3(cosf(p.x * PI * 2.0) * g_cylinderRadius, sinf(p.x * PI * 2.0) * g_cylinderRadius, p.y);
+}
+
+double minDistCylinder(vec2 p, vec2[] other)
+{
+  float dist = (other[0].mapToCylinder - p.mapToCylinder).squaredLength;
+  foreach(cur; other[1..$])
+  {
+    float dist2 = (cur.mapToCylinder - p.mapToCylinder).squaredLength;
+    if(dist2 < dist)
+      dist = dist2;
+  }
+  return dist;
+}
+
+void bestCanidatePattern(alias distanceFunc)(vec2[] pattern, ref Random gen)
+{
+  size_t numValid = 1;
+  pattern[0].x = uniform(0.0f, 1.0f, gen);
+  pattern[0].y = uniform(0.0f, 1.0f, gen);
+  foreach(ref p; pattern[1..$])
+  {
+    vec2 best;
+    best.x = uniform(0.0f, 1.0f, gen);
+    best.y = uniform(0.0f, 1.0f, gen);
+    float dist = distanceFunc(best, pattern[0..numValid]);
+    for(uint i=0; i < 2000; i++)
+    {
+      vec2 cur;
+      cur.x = uniform(0.0f, 1.0f, gen);
+      cur.y = uniform(0.0f, 1.0f, gen);
+      float dist2 = distanceFunc(cur, pattern[0..numValid]);
+      if(dist2 > dist)
+      {
+        dist = dist2;
+        best = cur;
+      }
+    }
+    p = best;
+    numValid++;
+  }
 }
 
 struct Edge
@@ -328,15 +378,16 @@ void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
 
 void takeSamples(Pixel[] pixels, ref Random gen)
 {
+  vec2[] pattern = (cast(vec2*)alloca(vec2.sizeof * Pixel.samples.length))[0..Pixel.samples.length];
   foreach(ref pixel; pixels)
   {
     if(!pixel.rastered)
       continue;
-    size_t numFails=0;
-    for(size_t i=0; i<pixel.samples.length && numFails < 8;)
+    bestCanidatePattern!(minDistCylinder)(pattern, gen);
+    foreach(size_t i, ref sample; pixel.samples)
     {
-	    float psi = uniform(0, 2 * PI, gen);
-	    float phi = uniform(0, PI_2, gen);
+	    float psi = pattern[i].x  * 2.0f * PI; //uniform(0, 2 * PI, gen);
+	    float phi = (pattern[i].y * 0.9f + 0.1f) * PI_2; //uniform(0, PI_2, gen);
 	    vec3 sampleDir = angleToDirection(phi, psi, pixel.normal);
 	    Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
 	    float hitDistance = 0.0f;
@@ -344,15 +395,15 @@ void takeSamples(Pixel[] pixels, ref Random gen)
 	    const(Scene.TriangleData)* hitData;
 	    if( g_scene.trace(sampleRay, hitDistance, hitTexcoords, hitData))
       {
-		    pixel.samples[i++] = hitTexcoords;
-        if(i==1)
-        {
-          pixel.color = vec3(hitTexcoords.x, hitTexcoords.y, 0.0f);
-        }
+		    sample = hitTexcoords;
 	    }
       else
       {
-        numFails++;
+        sample = vec2(0.0f, 0.0f); // nothing hit
+      }
+      if(i==1)
+      {
+        pixel.color = vec3(hitTexcoords.x, hitTexcoords.y, 0.0f);
       }
     }
   }
@@ -430,8 +481,76 @@ int main(string[] argv)
 
   Random gen;
 
-  takeSamples(pixels, gen);
-  drawScreen(screen, pixels);
+  uint step = g_width;
+  uint steps = cast(uint)(pixels.length / step);
+  ComputeOutputTask[] tasks = NewArray!ComputeOutputTask(steps);
+  auto taskIdentifier = TaskIdentifier.Create!"ComputeOutputTask"();
+  for(uint i=0; i < steps; i++)
+  {
+    auto startIndex = i * step;
+    tasks[i] = New!ComputeOutputTask(taskIdentifier, startIndex, pixels[startIndex..startIndex+step]);
+  }
+  scope(exit)
+  {
+    foreach(task; tasks)
+      Delete(task);
+    Delete(tasks);
+  }
+
+  SmartPtr!(Worker)[] workers;
+
+  auto threadsPerCPU = core.cpuid.threadsPerCPU;
+  if(g_numThreads > threadsPerCPU)
+  {
+    g_numThreads = threadsPerCPU;
+  }
+
+  if(g_numThreads > 1)
+  {
+    workers = NewArray!(SmartPtr!Worker)(g_numThreads-1);
+    for(uint i=0; i<g_numThreads-1; i++)
+    {
+      workers[i] = New!Worker();
+      workers[i].start();
+    }
+  }
+  scope(exit)
+  {
+    if(g_numThreads > 1)
+      Delete(workers);
+  }
+
+  foreach(task; tasks)
+  {
+    spawn(task);
+  }
+
+  /*for(size_t i=0; i < g_height; i++)
+  {
+    takeSamples(pixels[g_width * i..g_width * (i+1)], gen);
+    drawScreen(screen, pixels);
+  }*/
+
+  bool run = true;
+  while(!taskIdentifier.allFinished && run)
+  {
+    g_localTaskQueue.executeOneTask();
+    drawScreen(screen, pixels);
+
+    while(SDL.PollEvent(&event)) 
+    {      
+      switch (event.type) 
+      {
+        case SDL.QUIT:
+          run = false;
+          break;
+          /*case SDL.KEYDOWN:
+          run = false;
+          break;*/
+        default:
+      }
+    }
+  }
 
   writeDDSFiles(g_width, g_height, pixels);
 
@@ -481,72 +600,8 @@ int main(string[] argv)
 
   auto startRendering = Zeitpunkt(timer);
   auto startPass = startRendering;
-  bool run = true;
   while(run)
   {
-    // one time rendering
-    /++version(PerformanceTest)
-    {
-      if(progress < steps)
-      {
-        auto start = Zeitpunkt(timer);
-        auto startIndex = progress * step;
-        computeOutputColor(startIndex, pixels[startIndex..startIndex+step], gen);
-        drawScreen(screen, pixels);
-        progress++;
-        auto end = Zeitpunkt(timer);
-        totalTime += (end - start) / 1000.0f;
-        writefln("progress %d", progress);
-        if(progress == steps)
-          writefln("timeTaken %f", totalTime);
-      }
-    }
-    else
-    {
-      // scanline rendering
-      if(g_numThreads == 1)
-      {
-        auto startIndex = progress * step;
-        computeOutputColor(startIndex, pixels[startIndex..startIndex+step], gen);
-        drawScreen(screen, pixels);
-        progress++;
-        if(progress >= steps)
-          progress = 0;
-      }
-      else //if(progress < 1)
-      // task based rendering
-      {
-        if(taskIdentifier.allFinished)
-        {
-          drawScreen(screen, pixels);
-          if(progress > 0)
-          {
-            auto endPass = Zeitpunkt(timer);
-            writefln("pass %d done in %f seconds", progress, (endPass - startPass) / 1000.0f);
-            startPass = endPass;
-          }
-          progress++;
-          foreach(task; tasks)
-          {
-            spawn(task);
-          }
-        }
-        g_localTaskQueue.executeOneTask();      
-      }
-      /*else
-      {
-        if(taskIdentifier.allFinished)
-        {
-          drawScreen(screen, pixels);
-          g_run = false;
-        }
-        else
-        {
-          g_localTaskQueue.executeOneTask();  
-        }
-      }*/
-    }++/
-
     while(SDL.PollEvent(&event)) 
     {      
       switch (event.type) 
@@ -554,23 +609,20 @@ int main(string[] argv)
         case SDL.QUIT:
           run = false;
           break;
-        /*case SDL.KEYDOWN:
-          run = false;
-          break;*/
         default:
       }
     }
   }
 
   /*while(!taskIdentifier.allFinished)
-    g_localTaskQueue.executeOneTask();
+    g_localTaskQueue.executeOneTask();*/
 
   g_run = false;
 
   foreach(worker; workers)
   {
     worker.join(false);
-  }*/
+  }
 
   auto endRendering = Zeitpunkt(timer);
   SDL.Quit();

@@ -89,6 +89,7 @@
   <resfile />
   <exefile>$(OutDir)\$(ProjectName).exe</exefile>
   <useStdLibPath>1</useStdLibPath>
+  <cRuntime>2</cRuntime>
   <additionalOptions>-defaultlib=phobosnogcd -debuglib=phobosnogcd</additionalOptions>
   <preBuildCommand />
   <postBuildCommand />
@@ -126,7 +127,7 @@
   <noboundscheck>1</noboundscheck>
   <useSwitchError>0</useSwitchError>
   <useUnitTests>0</useUnitTests>
-  <useInline>1</useInline>
+  <useInline>0</useInline>
   <release>1</release>
   <preservePaths>0</preservePaths>
   <warnings>0</warnings>
@@ -183,6 +184,7 @@
   <resfile />
   <exefile>$(OutDir)\$(ProjectName).exe</exefile>
   <useStdLibPath>1</useStdLibPath>
+  <cRuntime>1</cRuntime>
   <additionalOptions>-defaultlib=phobosnogc -debuglib=phobosnogc</additionalOptions>
   <preBuildCommand />
   <postBuildCommand />
@@ -277,6 +279,7 @@
   <resfile />
   <exefile>$(OutDir)\$(ProjectName).exe</exefile>
   <useStdLibPath>1</useStdLibPath>
+  <cRuntime>2</cRuntime>
   <additionalOptions>-defaultlib=phobosnogc64d -debuglib=phobosnogc64d -v</additionalOptions>
   <preBuildCommand />
   <postBuildCommand />
@@ -371,6 +374,7 @@
   <resfile />
   <exefile>$(OutDir)\$(ProjectName).exe</exefile>
   <useStdLibPath>1</useStdLibPath>
+  <cRuntime>1</cRuntime>
   <additionalOptions>-defaultlib=phobosnogc -debuglib=phobosnogc</additionalOptions>
   <preBuildCommand />
   <postBuildCommand />

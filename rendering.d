@@ -27,7 +27,7 @@ struct Pixel
   vec3 position; // position in world space 
   float n = 0.0f;
   vec3 sum;
-  vec2[64] samples;
+  vec2[16] samples;
   bool rastered = false;
 };
 
