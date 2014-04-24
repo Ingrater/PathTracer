@@ -164,8 +164,8 @@ class Scene
       foreach(leaf; leafs)
       {
         auto curNode = leaf;
-        mat4 transform = mat4.Identity().Right2Left();
-        transform = loader.modelData.rootNode.transform * transform;
+        //mat4 transform = mat4.Identity().Right2Left();
+        mat4 transform = loader.modelData.rootNode.transform;// * transform;
         while(curNode !is null && curNode != loader.modelData.rootNode)
         {
           transform = curNode.transform * transform;
@@ -213,9 +213,9 @@ class Scene
             d.n[1] = normals[mesh.faces[i].indices[1]];
             d.n[2] = normals[mesh.faces[i].indices[2]];
             d.material = &m_materials[mesh.materialIndex];
-            d.tex[0] = mesh.texcoords[0][mesh.faces[i].indices[0]];
-            d.tex[1] = mesh.texcoords[0][mesh.faces[i].indices[1]];
-            d.tex[2] = mesh.texcoords[0][mesh.faces[i].indices[2]];
+            d.tex[0] = mesh.texcoords[1][mesh.faces[i].indices[0]];
+            d.tex[1] = mesh.texcoords[1][mesh.faces[i].indices[1]];
+            d.tex[2] = mesh.texcoords[1][mesh.faces[i].indices[2]];
 
             auto up = triangles[i].plane.normal;
             auto dir = vec3(1,0,0);
@@ -442,7 +442,7 @@ class Scene
       else version(UseOctree)
       {
         alias LooseOctree!(Node*, NodeOctreePolicy, PointerHashPolicy, TakeOwnership.no) Octree;
-        auto octree = New!Octree(boundingRadius * 2.0f, 0.1f);
+        auto octree = New!Octree(boundingRadius * 0.5f, 0.001f);
         scope(exit) Delete(octree);
         foreach(size_t i, ref triangle; m_triangles)
         {
@@ -829,7 +829,7 @@ class Scene
   void saveTree(const(char)[] filename)
   {
     auto outFile = scopedRef!Chunkfile(rcstring(filename), Chunkfile.Operation.Write, Chunkfile.DebugMode.Off);
-    outFile.startWriting("tree", 1);
+    outFile.startWriting("tree", 2);
     scope(exit) outFile.endWriting();
 
     outFile.write(int_cast!uint(m_materials.length));
@@ -850,6 +850,9 @@ class Scene
       assert(materialIndex < m_materials.length);
       outFile.write(materialIndex);
       outFile.write(data.localToWorld);
+      outFile.write(data.tex[0]);
+      outFile.write(data.tex[1]);
+      outFile.write(data.tex[2]);
     }
 
     outFile.write(int_cast!uint(m_nodes.length));
@@ -882,7 +885,7 @@ class Scene
       throw New!RCException(format("File '%s' is not a tree format", filename));
     }
 
-    if(file.fileVersion != 1)
+    if(file.fileVersion != 2)
     {
       throw New!RCException(format("Tree '%s' does have old format, please reexport", filename));
     }
@@ -917,6 +920,9 @@ class Scene
       file.read(materialIndex);
       data.material = &m_materials[materialIndex];
       file.read(data.localToWorld);
+      file.read(data.tex[0]);
+      file.read(data.tex[1]);
+      file.read(data.tex[2]);
     }
 
     // read nodes

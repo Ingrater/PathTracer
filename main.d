@@ -22,6 +22,8 @@ import sdl;
 import rendering;
 import scene;
 
+__gshared vec2[16][128] g_precomputedSamples;
+
 //version = PerformanceTest;
 
 void setPixel(SDL.Surface *screen, int x, int y, ubyte r, ubyte g, ubyte b)
@@ -149,16 +151,38 @@ class Worker : Thread
 
 auto interpolate(T)(float u, float v, T val0, T val1, T val2)
 {
-  float x = 1.0f / (u + v);
-  float u1 = x * u;
-  float v1 = x * v;
+  if(u < 0.0f)
+    u = 0.0f;
+  if(v < 0.0f)
+    v = 0.0f;
+  float uv = (u + v);
+  float u1, v1;
+  if(uv != 0.0f)
+  {
+    float x = 1.0f / uv;
+    u1 = x * u;
+    v1 = x * v;
+  }
+  else
+  {
+    u1 = u;
+    v1 = v;
+  }
   immutable float sqrt2 = 1.414213562f;
-  float d1 = fastsqrt((1.0f-u1)*(1.0f-u1) + v1*v1) / sqrt2;
-  float d2 = fastsqrt(u1*u1 + (1.0f-v1)*(1.0f-v1)) / sqrt2;
+  float d1 = sqrt((1.0f-u1)*(1.0f-u1) + v1*v1) / sqrt2;
+  float d2 = sqrt(u1*u1 + (1.0f-v1)*(1.0f-v1)) / sqrt2;
   auto interpolated1 = val1 * d1 + val2 * d2;
 
-  float len = fastsqrt(u1*u1 + v1*v1);
-  float i1 = fastsqrt(u*u+v*v) / len;
+  float i1;
+  if(uv != 0.0f)
+  {
+    float len = sqrt(u1*u1 + v1*v1);
+    i1 = sqrt(u*u+v*v) / len; 
+  }
+  else
+  {
+    i1 = 0.0f;
+  }
   float i2 = 1.0f - i1;
 
   return val0 * i2 + interpolated1 * i1;
@@ -211,6 +235,20 @@ void bestCanidatePattern(alias distanceFunc)(vec2[] pattern, ref Random gen)
   }
 }
 
+void precomputeSamples(ref Random gen)
+{
+  foreach(ref samples; g_precomputedSamples)
+  {
+    bestCanidatePattern!minDistCylinder(samples, gen);
+  }
+}
+
+void pickPrecomputedSample(vec2[] pattern, ref Random gen)
+{
+  uint index = uniform(0, g_precomputedSamples.length, gen);
+  pattern[] = g_precomputedSamples[index];
+}
+
 struct Edge
 {
   uint minY, maxY;
@@ -226,7 +264,7 @@ struct Edge
     y1 = floor(y1);
     x2 = floor(x2);
     y2 = floor(y2);
-    assert(!epsilonCompare(y1, y2));
+    //assert(!epsilonCompare(y1, y2)); //TODO fix properly
 
     if(y1 < y2)
     {
@@ -354,7 +392,7 @@ void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
       uint start = cast(uint)(edges[0].xs < 0.0f ? 0.0f : edges[0].xs);
       vec2 uv = edges[0].uv;
       vec2 uvDelta = (edges[1].uv - edges[0].uv) / cast(float)(end - start + 1);
-      for(uint x = start; x < end; x++)
+      for(uint x = start; x <= end; x++)
       {
         uv += uvDelta;
         auto curPixel = &pixels[y * g_width + x];
@@ -366,6 +404,7 @@ void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
         //curPixel.color = vec3(coords.x, coords.y, 0.0f);
         //curPixel.color = vec3(uv.x, uv.y, 0.0f);
         curPixel.color = curPixel.normal * 0.5f + vec3(0.5f);
+        //curPixel.color = vec3(1.0f, 0.0f, 0.0f);
         
       }
       edges[0].xs += edges[0].invM;
@@ -383,7 +422,8 @@ void takeSamples(Pixel[] pixels, ref Random gen)
   {
     if(!pixel.rastered)
       continue;
-    bestCanidatePattern!(minDistCylinder)(pattern, gen);
+    //bestCanidatePattern!(minDistCylinder)(pattern, gen);
+    pickPrecomputedSample(pattern, gen);
     foreach(size_t i, ref sample; pixel.samples)
     {
 	    float psi = pattern[i].x  * 2.0f * PI; //uniform(0, 2 * PI, gen);
@@ -416,7 +456,7 @@ void writeDDSFiles(uint width, uint height, Pixel[] pixels)
   uint numFiles = (Pixel.samples.length + 1) / 2;
   for(uint i=0; i<numFiles; i++)
   {
-    for(uint y=0; y<width; y++)
+    for(uint y=0; y<height; y++)
     {
       for(uint x=0; x<width; x++)
       {
@@ -468,20 +508,45 @@ int main(string[] argv)
   //allocate one element more for sse tone mapper
   Pixel[] pixels = NewArray!Pixel(g_width * g_height + 1)[0..$-1];
   scope(exit) Delete(pixels);
+  SDL.Event event;
 
   //rasterTriangles(39, 40, pixels);
   //rasterTriangles(2, 4, pixels);
-  rasterTriangles(0, g_scene.triangles.length, pixels);
-  drawScreen(screen, pixels);
+  uint start = 0;
+  uint triangleStep = 1000;
+  while(true)
+  {
+    uint end = start + triangleStep;
+    if(end > g_scene.triangles.length)
+      end = g_scene.triangles.length;
+    rasterTriangles(start, end, pixels);
+    drawScreen(screen, pixels);
+    start += triangleStep;
+    if(g_scene.triangles.length == end)
+      break;
+
+    while(SDL.PollEvent(&event)) 
+    {      
+    }
+  }
+
+  /*while(true)
+  {
+    while(SDL.PollEvent(&event)) 
+    {      
+    }
+  }*/
 
   
 
   int h = 0;
-  SDL.Event event;
+
 
   Random gen;
 
-  uint step = g_width;
+  precomputeSamples(gen);
+
+  uint step = 64;
   uint steps = cast(uint)(pixels.length / step);
   ComputeOutputTask[] tasks = NewArray!ComputeOutputTask(steps);
   auto taskIdentifier = TaskIdentifier.Create!"ComputeOutputTask"();
