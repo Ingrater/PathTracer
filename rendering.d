@@ -15,7 +15,7 @@ import thBase.container.vector;
 __gshared Camera g_camera;
 __gshared Scene g_scene;
 __gshared uint g_width = 512;
-__gshared uint g_height = 128;
+__gshared uint g_height = 512;
 __gshared uint g_numThreads = 8;
 
 // Holds all information for a single pixel visible on the screen
@@ -27,8 +27,10 @@ struct Pixel
   vec3 position; // position in world space 
   float n = 0.0f;
   vec3 sum;
-  vec2[16] samples;
+  vec2[numSamples] samples;
   bool rastered = false;
+  uint numSkyRays = 0;
+  uint ambient = 0;
 };
 
 // Holds all information about a material

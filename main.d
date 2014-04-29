@@ -22,7 +22,10 @@ import sdl;
 import rendering;
 import scene;
 
-__gshared vec2[16][128] g_precomputedSamples;
+enum uint numSamples = 32;
+enum uint additionalSkySamples = 512;
+
+__gshared vec2[numSamples*2][128] g_precomputedSamples;
 
 //version = PerformanceTest;
 
@@ -237,10 +240,22 @@ void bestCanidatePattern(alias distanceFunc)(vec2[] pattern, ref Random gen)
 
 void precomputeSamples(ref Random gen)
 {
-  foreach(ref samples; g_precomputedSamples)
   {
+    auto samplesFile = RawFile("samples.dat", "rb");
+    if(samplesFile.isOpen && samplesFile.size == g_precomputedSamples.sizeof)
+    {
+      samplesFile.readArray(g_precomputedSamples[]);
+      return;
+    }
+  }
+
+  foreach(size_t i, ref samples; g_precomputedSamples)
+  {
+    writefln("pattern %d of %d", i, g_precomputedSamples.length);
     bestCanidatePattern!minDistCylinder(samples, gen);
   }
+  auto samplesFile = RawFile("samples.dat", "wb");
+  samplesFile.writeArray(g_precomputedSamples[]);
 }
 
 void pickPrecomputedSample(vec2[] pattern, ref Random gen)
@@ -264,7 +279,7 @@ struct Edge
     y1 = floor(y1);
     x2 = floor(x2);
     y2 = floor(y2);
-    //assert(!epsilonCompare(y1, y2)); //TODO fix properly
+    assert(!epsilonCompare(y1, y2)); //TODO fix properly
 
     if(y1 < y2)
     {
@@ -305,6 +320,9 @@ void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
     auto triangle = &g_scene.triangles[i + from];
     vec2[3] verts;
     verts[] = t.tex[];
+    verts[0] *= vec2(fWidth, fHeight);
+    verts[1] *= vec2(fWidth, fHeight);
+    verts[2] *= vec2(fWidth, fHeight);
 
     vec2 vU = verts[1] - verts[0];
     vec2 vV = verts[2] - verts[0];
@@ -314,14 +332,12 @@ void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
     uvs[1] = vec2(0.0f, 1.0f);
     uvs[2] = vec2(1.0f, 0.0f);
 
-    uint[3] swizzle = [0, 1, 2];
     vec3[3] wsPos = [ triangle.v0, triangle.v1, triangle.v2 ];
 
     if(verts[0].y > verts[1].y)
     {
       swap(verts[0], verts[1]);
       swap(uvs[0], uvs[1]);
-      swap(swizzle[0], swizzle[1]);
     }
     if(verts[0].y > verts[2].y)
     {
@@ -329,15 +345,20 @@ void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
       swap(verts[0], verts[1]);
       swap(uvs[1], uvs[2]);
       swap(uvs[0], uvs[1]);
-      swap(swizzle[1], swizzle[2]);
-      swap(swizzle[0], swizzle[1]);
     }
     else if(verts[1].y > verts[2].y)
     {
       swap(verts[1], verts[2]);
       swap(uvs[1], uvs[2]);
-      swap(swizzle[1], swizzle[2]);
     }
+
+    verts[0] = floor(verts[0]);
+    verts[1] = floor(verts[1]);
+    verts[2] = floor(verts[2]);
+    if(verts[0].x == verts[1].x && verts[1].x == verts[2].x)
+      continue;
+    if(verts[0].y == verts[1].y && verts[1].y == verts[2].y)
+      continue;
 
     Edge[3] edges;
     uint numEdges = 0;
@@ -346,19 +367,19 @@ void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
     vV = vec2(vV.x * fWidth, vV.y * fHeight);
     vec2 uvDelta = vec2(vU.x / vU.dot(vU), vV.x / vV.dot(vV));*/
 
-    if(cast(uint)(verts[0].y * fHeight) != cast(uint)(verts[1].y * fHeight))
+    if(cast(uint)(verts[0].y) != cast(uint)(verts[1].y))
     {
-      edges[numEdges++] = Edge(verts[0].x * fWidth, verts[0].y * fHeight, uvs[0], verts[1].x * fWidth, verts[1].y * fHeight, uvs[1]);
-      edges[numEdges++] = Edge(verts[0].x * fWidth, verts[0].y * fHeight, uvs[0], verts[2].x * fWidth, verts[2].y * fHeight, uvs[2]);
-      if(cast(uint)(verts[1].y * fHeight) != cast(uint)(verts[2].y * fHeight))
+      edges[numEdges++] = Edge(verts[0].x, verts[0].y, uvs[0], verts[1].x, verts[1].y, uvs[1]);
+      edges[numEdges++] = Edge(verts[0].x, verts[0].y, uvs[0], verts[2].x, verts[2].y, uvs[2]);
+      if(cast(uint)(verts[1].y) != cast(uint)(verts[2].y))
       {
-        edges[numEdges++] = Edge(verts[1].x * fWidth, verts[1].y * fHeight, uvs[1], verts[2].x * fWidth, verts[2].y * fHeight, uvs[2]);
+        edges[numEdges++] = Edge(verts[1].x, verts[1].y, uvs[1], verts[2].x, verts[2].y, uvs[2]);
       }
     }
     else
     {
-      edges[numEdges++] = Edge(verts[0].x * fWidth, verts[0].y * fHeight, uvs[0], verts[2].x * fWidth, verts[2].y * fHeight, uvs[2]);
-      edges[numEdges++] = Edge(verts[1].x * fWidth, verts[1].y * fHeight, uvs[1], verts[2].x * fWidth, verts[2].y * fHeight, uvs[2]);
+      edges[numEdges++] = Edge(verts[0].x, verts[0].y, uvs[0], verts[2].x, verts[2].y, uvs[2]);
+      edges[numEdges++] = Edge(verts[1].x, verts[1].y, uvs[1], verts[2].x, verts[2].y, uvs[2]);
     }
 
     if(edges[0].xs > edges[1].xs || (epsilonCompare(edges[0].xs,edges[1].xs) && edges[0].invM > edges[1].invM))
@@ -417,17 +438,20 @@ void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
 
 void takeSamples(Pixel[] pixels, ref Random gen)
 {
-  vec2[] pattern = (cast(vec2*)alloca(vec2.sizeof * Pixel.samples.length))[0..Pixel.samples.length];
+  vec2[] pattern = (cast(vec2*)alloca(vec2.sizeof * numSamples*2))[0..numSamples*2];
   foreach(ref pixel; pixels)
   {
     if(!pixel.rastered)
       continue;
     //bestCanidatePattern!(minDistCylinder)(pattern, gen);
     pickPrecomputedSample(pattern, gen);
-    foreach(size_t i, ref sample; pixel.samples)
+    size_t i = 0;
+    foreach(ref sample; pixel.samples)
     {
+      start:
 	    float psi = pattern[i].x  * 2.0f * PI; //uniform(0, 2 * PI, gen);
 	    float phi = (pattern[i].y * 0.9f + 0.1f) * PI_2; //uniform(0, PI_2, gen);
+      i++;
 	    vec3 sampleDir = angleToDirection(phi, psi, pixel.normal);
 	    Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
 	    float hitDistance = 0.0f;
@@ -439,37 +463,100 @@ void takeSamples(Pixel[] pixels, ref Random gen)
 	    }
       else
       {
-        sample = vec2(0.0f, 0.0f); // nothing hit
+        // nothing hit
+        //sample = vec2(0.0f, 0.0f); 
+        pixel.ambient++;
+        pixel.numSkyRays++;
+        if(i < numSamples)
+        {
+          goto start;
+        }
+        else
+        {
+          sample = vec2(0.0f, 0.0f);
+        }
       }
-      if(i==1)
+      /*if(i==1)
       {
         pixel.color = vec3(hitTexcoords.x, hitTexcoords.y, 0.0f);
+      }*/
+    }
+    for(; i < numSamples * 2; i++)
+    {
+	    float psi = pattern[i].x  * 2.0f * PI; //uniform(0, 2 * PI, gen);
+	    float phi = (pattern[i].y * 0.9f + 0.1f) * PI_2; //uniform(0, PI_2, gen);
+	    vec3 sampleDir = angleToDirection(phi, psi, pixel.normal);
+	    Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
+	    float hitDistance = 0.0f;
+	    vec2 hitTexcoords;
+	    const(Scene.TriangleData)* hitData;
+	    if( !g_scene.trace(sampleRay, hitDistance, hitTexcoords, hitData))
+      {
+		    pixel.ambient++;
+	    }
+    }
+    for(uint j=0; j < additionalSkySamples; j++)
+    {
+      float psi = uniform(0, 2 * PI, gen) * 2.0f * PI;
+      float phi = uniform(0, PI_2, gen) * PI_2;
+      vec3 sampleDir = angleToDirection(phi, psi, pixel.normal);
+      Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
+      float hitDistance = 0.0f;
+      vec2 hitTexcoords;
+      const(Scene.TriangleData)* hitData;
+      if( !g_scene.trace(sampleRay, hitDistance, hitTexcoords, hitData))
+      {
+        pixel.ambient++;
       }
     }
+
+    pixel.color = vec3((cast(float)pixel.ambient / cast(float)(numSamples * 2 + additionalSkySamples)), 
+                       0.0f, //(cast(float)pixel.numSkyRays / cast(float)(numSamples*2)), 
+                       0.0f);
   }
 }
 
 void writeDDSFiles(uint width, uint height, Pixel[] pixels)
 {
-  auto data = NewArray!ushort(width * height * 4);
-  scope(exit) Delete(data);
-  uint numFiles = (Pixel.samples.length + 1) / 2;
-  for(uint i=0; i<numFiles; i++)
   {
+    auto data = NewArray!ushort(width * height * 4);
+    scope(exit) Delete(data);
+    uint numFiles = (Pixel.samples.length + 1) / 2;
+    for(uint i=0; i<numFiles; i++)
+    {
+      for(uint y=0; y<height; y++)
+      {
+        for(uint x=0; x<width; x++)
+        {
+          data[y * width * 4 + x * 4] = cast(ushort)(pixels[y * width + x].samples[i*2].x * 65535.0f);
+          data[y * width * 4 + x * 4 + 1] = cast(ushort)(pixels[y * width + x].samples[i*2].y * 65535.0f);
+          data[y * width * 4 + x * 4 + 2] = cast(ushort)(pixels[y * width + x].samples[i*2+1].x * 65535.0f);
+          data[y * width * 4 + x * 4 + 3] = cast(ushort)(pixels[y * width + x].samples[i*2+1].y * 65535.0f);
+        }
+      }
+      char[256] name;
+      auto len = formatStatic(name, "gi%d.dds", i);
+      WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R16G16B16A16_UNORM, (cast(void*)data.ptr)[0..(width * height * 4 * ushort.sizeof)]);
+      writefln("%s written", name[0..len]);
+    }
+  }
+
+  {
+    auto data = NewArray!ubyte(width * height * 4);
+    scope(exit) Delete(data);
     for(uint y=0; y<height; y++)
     {
       for(uint x=0; x<width; x++)
       {
-        data[y * width * 4 + x * 4] = cast(ushort)(pixels[y * width + x].samples[i*2].x * 65535.0f);
-        data[y * width * 4 + x * 4 + 1] = cast(ushort)(pixels[y * width + x].samples[i*2].y * 65535.0f);
-        data[y * width * 4 + x * 4 + 2] = cast(ushort)(pixels[y * width + x].samples[i*2+1].x * 65535.0f);
-        data[y * width * 4 + x * 4 + 3] = cast(ushort)(pixels[y * width + x].samples[i*2+1].y * 65535.0f);
+        float ambient = cast(float)pixels[y * width + x].ambient / cast(float)(numSamples * 2 + additionalSkySamples);
+        data[y * width * 4 + x * 4] = cast(ubyte)(ambient * 255.0f);
+        data[y * width * 4 + x * 4 + 1] = cast(ubyte)(pixels[y * width + x].numSkyRays);
+        data[y * width * 4 + x * 4 + 2] = cast(ubyte)0;
+        data[y * width * 4 + x * 4 + 3] = cast(ubyte)0;
       }
     }
-    char[256] name;
-    auto len = formatStatic(name, "gi%d.dds", i);
-    WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R16G16B16A16_UNORM, (cast(void*)data.ptr)[0..(width * height * 4 * ushort.sizeof)]);
-    writefln("%s written", name[0..len]);
+    WriteDDS("sky.dds", width, height, DDSLoader.DXGI_FORMAT.DXGI_FORMAT_R8G8B8A8_UNORM, (cast(void*)data.ptr)[0..(width * height * 4 * ubyte.sizeof)]);
+    writefln("sky.dds written");
   }
 }
 
@@ -544,7 +631,9 @@ int main(string[] argv)
 
   Random gen;
 
+  writefln("computing sampling patterns...");
   precomputeSamples(gen);
+  writefln("computing sample locations...");
 
   uint step = 64;
   uint steps = cast(uint)(pixels.length / step);

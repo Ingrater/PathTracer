@@ -26,7 +26,7 @@ import core.stdc.math;
 
 import main : interpolate;
 
-version = UseOctree;
+//version = UseOctree;
 //version = UseTopDown;
 
 //Thread local bufferes for the tracing algorithm
