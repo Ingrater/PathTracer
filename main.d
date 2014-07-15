@@ -24,6 +24,8 @@ import scene;
 
 enum uint numSamples = 32;
 enum uint additionalSkySamples = 512;
+enum bool extrapolateGeometryEnabled = false;
+enum bool useBlackAmbient = false;
 
 __gshared vec2[numSamples*2][128] g_precomputedSamples;
 
@@ -630,34 +632,37 @@ void takeSamples(uint offset, Pixel[] pixels, ref Random gen)
         pixel.color = vec3(hitTexcoords.x, hitTexcoords.y, 0.0f);
       }*/
     }
-    for(; i < numSamples * 2; i++)
+    static if(!useBlackAmbient)
     {
-	    float psi = pattern[i].x  * 2.0f * PI; //uniform(0, 2 * PI, gen);
-	    float phi = (pattern[i].y * 0.9f + 0.1f) * PI_2; //uniform(0, PI_2, gen);
-	    vec3 sampleDir = angleToDirection(phi, psi, pixel.normal);
-      if(sampleDir.z > 0.0f)
+      for(; i < numSamples * 2; i++)
       {
-	      Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
-	      if( g_scene.hitsNothing(sampleRay) )
+	      float psi = pattern[i].x  * 2.0f * PI; //uniform(0, 2 * PI, gen);
+	      float phi = (pattern[i].y * 0.9f + 0.1f) * PI_2; //uniform(0, PI_2, gen);
+	      vec3 sampleDir = angleToDirection(phi, psi, pixel.normal);
+        if(sampleDir.z > 0.0f)
         {
-		      pixel.ambient++;
-	      }
+	        Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
+	        if( g_scene.hitsNothing(sampleRay) )
+          {
+		        pixel.ambient++;
+	        }
+        }
       }
-    }
-    for(uint j=0; j < additionalSkySamples; j++)
-    {
-      float psi = uniform(0, 2 * PI, gen) * 2.0f * PI;
-      float phi = uniform(0, PI_2, gen) * PI_2;
-      vec3 sampleDir = angleToDirection(phi, psi, pixel.normal);
-      if(sampleDir.z > 0.0f)
+      for(uint j=0; j < additionalSkySamples; j++)
       {
-        Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
-        float hitDistance = 0.0f;
-        vec2 hitTexcoords;
-        const(Scene.TriangleData)* hitData;
-        if( g_scene.hitsNothing(sampleRay) )
+        float psi = uniform(0, 2 * PI, gen) * 2.0f * PI;
+        float phi = uniform(0, PI_2, gen) * PI_2;
+        vec3 sampleDir = angleToDirection(phi, psi, pixel.normal);
+        if(sampleDir.z > 0.0f)
         {
-          pixel.ambient++;
+          Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
+          float hitDistance = 0.0f;
+          vec2 hitTexcoords;
+          const(Scene.TriangleData)* hitData;
+          if( g_scene.hitsNothing(sampleRay) )
+          {
+            pixel.ambient++;
+          }
         }
       }
     }
@@ -700,7 +705,10 @@ void writeDDSFiles(uint width, uint height, Pixel[] pixels)
     {
       for(uint x=0; x<width; x++)
       {
-        float ambient = cast(float)pixels[y * width + x].ambient / cast(float)(numSamples * 2 + additionalSkySamples);
+        static if(useBlackAmbient)
+          float ambient = 0.0f;
+        else
+          float ambient = cast(float)pixels[y * width + x].ambient / cast(float)(numSamples * 2 + additionalSkySamples);
         data[y * width * 4 + x * 4] = cast(ubyte)(ambient * 255.0f);
         data[y * width * 4 + x * 4 + 1] = cast(ubyte)(pixels[y * width + x].numSkippedSamples);
         data[y * width * 4 + x * 4 + 2] = cast(ubyte)0;
@@ -904,45 +912,49 @@ int main(string[] argv)
 
   bool run = true;
 
-  writefln("extrapolating geometry...");
-  foreach(task; edgeTasks)
+  static if(extrapolateGeometryEnabled)
   {
-    spawn(task);
-  }
+    writefln("extrapolating geometry...");
+    foreach(task; edgeTasks)
+    {
+      spawn(task);
+    }
 
-  while(!edgeTaskIdentifier.allFinished && run)
-  //while(true)
-  {
-    g_localTaskQueue.executeOneTask();
-    drawScreen(screen, pixels);
+    while(!edgeTaskIdentifier.allFinished && run)
+    //while(true)
+    {
+      g_localTaskQueue.executeOneTask();
+      drawScreen(screen, pixels);
 
-    while(SDL.PollEvent(&event)) 
-    {      
-      switch (event.type) 
-      {
-        case SDL.QUIT:
-          run = false;
-          break;
-          /*case SDL.KEYDOWN:
-          run = false;
-          break;*/
-        default:
+      while(SDL.PollEvent(&event)) 
+      {      
+        switch (event.type) 
+        {
+          case SDL.QUIT:
+            run = false;
+            break;
+            /*case SDL.KEYDOWN:
+            run = false;
+            break;*/
+          default:
+        }
       }
     }
-  }
-  if(!run)
-  {
-    g_run = false;
-
-    foreach(worker; workers)
+    if(!run)
     {
-      worker.join(false);
-    }
+      g_run = false;
 
-    return 1;
+      foreach(worker; workers)
+      {
+        worker.join(false);
+      }
+
+      return 1;
+    }
   }
   auto endGeometryExtrapolation = Zeitpunkt(timer);
-  writefln("extrapolating geometry took %f s", (endGeometryExtrapolation - endComputeSamples) / 1000.0f);
+  static if(extrapolateGeometryEnabled)
+    writefln("extrapolating geometry took %f s", (endGeometryExtrapolation - endComputeSamples) / 1000.0f);
 
   // take samples
   writefln("computing sample locations...");
@@ -983,7 +995,10 @@ int main(string[] argv)
   }
 
   auto endTakeSamples = Zeitpunkt(timer);
-  writefln("Computing samples and ambient took %f s", (endTakeSamples - endGeometryExtrapolation) / 1000.0f);
+  static if(extrapolateGeometryEnabled)
+    writefln("Computing samples and ambient took %f s", (endTakeSamples - endGeometryExtrapolation) / 1000.0f);
+  else
+    writefln("Computing samples and ambient took %f s", (endTakeSamples - endComputeSamples) / 1000.0f);
 
   writeDDSFiles(g_width, g_height, pixels);
   auto endWriteData = Zeitpunkt(timer);
