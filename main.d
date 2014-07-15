@@ -31,6 +31,8 @@ __gshared vec2[numSamples*2][128] g_precomputedSamples;
 
 void setPixel(SDL.Surface *screen, int x, int y, ubyte r, ubyte g, ubyte b)
 {
+  if(x < 0 || x >= g_width || y < 0 || y >= g_height)
+    return;
   uint *pixmem32;
   uint colour;  
 
@@ -38,6 +40,55 @@ void setPixel(SDL.Surface *screen, int x, int y, ubyte r, ubyte g, ubyte b)
 
   pixmem32 = cast(uint*)(screen.pixels + (y * screen.pitch + x * 4));
   *pixmem32 = colour;
+}
+
+void drawLine( SDL.Surface *screen, vec2 p1, vec2 p2 )
+{
+  float x1 = p1.x;
+  float x2 = p2.x;
+  float y1 = p1.y;
+  float y2 = p2.y;
+  // Bresenham's line algorithm
+  const bool steep = (fabs(y2 - y1) > fabs(x2 - x1));
+  if(steep)
+  {
+    swap(x1, y1);
+    swap(x2, y2);
+  }
+
+  if(x1 > x2)
+  {
+    swap(x1, x2);
+    swap(y1, y2);
+  }
+
+  const float dx = x2 - x1;
+  const float dy = fabs(y2 - y1);
+
+  float error = dx / 2.0f;
+  const int ystep = (y1 < y2) ? 1 : -1;
+  int y = cast(int)y1;
+
+  const int maxX = cast(int)x2;
+
+  for(int x=cast(int)x1; x<maxX; x++)
+  {
+    if(steep)
+    {
+      setPixel(screen, y, x, 255, 0, 0);
+    }
+    else
+    {
+      setPixel(screen, x, y, 255, 0, 0);
+    }
+
+    error -= dy;
+    if(error < 0)
+    {
+      y += ystep;
+      error += dx;
+    }
+  }
 }
 
 void drawScreen(SDL.Surface* screen, Pixel[] pixels)
@@ -113,26 +164,28 @@ void drawScreen(SDL.Surface* screen, Pixel[] pixels)
 __gshared bool g_run = true;
 
 // Task which triggeres the computation
-class ComputeOutputTask : Task
+class PerPixelTask : Task
 {
   private:
     uint m_pixelOffset;
     Pixel[] m_pixels;
     Random m_gen;
+    void function(uint offset, Pixel[], ref Random) m_func;
 
   public:
-    this(TaskIdentifier identifier, uint pixelOffset, Pixel[] pixels)
+    this(TaskIdentifier identifier, void function(uint offset, Pixel[], ref Random) func, uint pixelOffset, Pixel[] pixels)
     {
       super(identifier);
       m_pixelOffset = pixelOffset;
       m_pixels = pixels;
       m_gen.seed(m_pixelOffset + cast(uint)pixels[0].n);
+      m_func = func;
     }
 
     override void Execute()
     {
       //computeOutputColor(m_pixelOffset, m_pixels, m_gen);
-      takeSamples(m_pixels, m_gen);
+      m_func(m_pixelOffset, m_pixels, m_gen);
     }
 
     override void OnTaskFinished() {}
@@ -189,6 +242,56 @@ auto interpolate(T)(float u, float v, T val0, T val1, T val2)
   float i2 = 1.0f - i1;
 
   return val0 * i2 + interpolated1 * i1;
+}
+
+auto extrapolate(T)(float u, float v, T val0, T val1, T val2)
+{
+  float uv = (u + v);
+  float u1, v1;
+  if(uv != 0.0f)
+  {
+    float x = 1.0f / uv;
+    u1 = x * u;
+    v1 = x * v;
+  }
+  else
+  {
+    u1 = u;
+    v1 = v;
+  }
+  immutable float sqrt2 = 1.414213562f;
+  float d1 = sqrt((1.0f-u1)*(1.0f-u1) + v1*v1) / sqrt2;
+  float d2 = sqrt(u1*u1 + (1.0f-v1)*(1.0f-v1)) / sqrt2;
+  auto interpolated1 = val1 * d1 + val2 * d2;
+
+  float i1;
+  if(uv != 0.0f)
+  {
+    float len = sqrt(u1*u1 + v1*v1);
+    i1 = sqrt(u*u+v*v) / len; 
+  }
+  else
+  {
+    i1 = 0.0f;
+  }
+  float i2 = 1.0f - i1;
+
+  return val0 * i2 + interpolated1 * i1;
+}
+
+vec2 computeUV(vec2 val, vec2 v0, vec2 v1, vec2 v2)
+{
+  auto p = v0;
+  auto r1 = (v1 - v0);
+  auto r2 = (v2 - v0);
+  float d = (r1.x * r2.y - r1.y * r2.x);
+  if(d.epsilonCompare(0.0f))
+  {
+    return vec2(float.max, float.max);
+  }
+  float u = (-p.x * r2.y + p.y * r2.x - r2.x * val.y + r2.y * val.x) / d;
+  float v = ( p.x * r1.y - p.y * r1.x + r1.x * val.y - r1.y * val.x) / d;
+  return vec2(u, v);
 }
 
 float g_cylinderRadius = 0.50f;
@@ -324,9 +427,6 @@ void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
     verts[1] *= vec2(fWidth, fHeight);
     verts[2] *= vec2(fWidth, fHeight);
 
-    vec2 vU = verts[1] - verts[0];
-    vec2 vV = verts[2] - verts[0];
-
     vec2[3] uvs;
     uvs[0] = vec2(0.0f, 0.0f);
     uvs[1] = vec2(0.0f, 1.0f);
@@ -362,10 +462,6 @@ void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
 
     Edge[3] edges;
     uint numEdges = 0;
-
-    /*vU = vec2(vU.x * fWidth, vU.y * fHeight);
-    vV = vec2(vV.x * fWidth, vV.y * fHeight);
-    vec2 uvDelta = vec2(vU.x / vU.dot(vU), vV.x / vV.dot(vV));*/
 
     if(cast(uint)(verts[0].y) != cast(uint)(verts[1].y))
     {
@@ -421,11 +517,14 @@ void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
         curPixel.position = interpolate(uv.x, uv.y, wsPos[0], wsPos[1], wsPos[2]);
         curPixel.normal = interpolate(uv.x, uv.y, t.n[0], t.n[1], t.n[2]);
         vec2 coords = interpolate(uv.x, uv.y, t.tex[0], t.tex[1], t.tex[2]);
-        //curPixel.color = curPixel.position * (1.0f / 20.0f) + vec3(0.5f);
+        curPixel.color = curPixel.position * (1.0f / 20.0f) + vec3(0.5f);
         //curPixel.color = vec3(coords.x, coords.y, 0.0f);
-        //curPixel.color = vec3(uv.x, uv.y, 0.0f);
-        curPixel.color = curPixel.normal * 0.5f + vec3(0.5f);
+        //vec2 uv2 = uv * 0.5f + vec2(0.5f);
+        //curPixel.color = vec3(uv2.x, uv2.y, uv2.x < 0.0f || uv2.y < 0.0f ? 1.0f : 0.0f);
+        //curPixel.color = curPixel.normal * 0.5f + vec3(0.5f);
         //curPixel.color = vec3(1.0f, 0.0f, 0.0f);
+        //curPixel.color = t.n[0] * 0.5f + vec3(0.5f);
+        //curPixel.color = vec3(cast(float)i / cast(float)g_scene.triangles.length);
         
       }
       edges[0].xs += edges[0].invM;
@@ -436,7 +535,58 @@ void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
   }
 }
 
-void takeSamples(Pixel[] pixels, ref Random gen)
+void extrapolateGeometry(uint offset, Pixel[] pixels, ref Random gen)
+{
+  auto edges = g_scene.textureEdges.query(Rectangle(vec2(0, 0), vec2(0.01, 0.01)));
+  auto pixelSize = vec2(1.0f / g_width, 1.0f / g_height);
+  auto searchDistance = pixelSize * 3.0f;
+  float maxDist = 2.0f / g_width;
+  vec2[3] verts;
+
+  foreach(size_t i, ref pixel; pixels)
+  {
+    if(!pixel.rastered)
+    {
+      uint x = (offset + i) % g_width;
+      uint y = (offset + i) / g_width;
+      vec2 pos = vec2(cast(float)x, cast(float)y) * pixelSize + pixelSize * 0.5f;
+      edges = g_scene.textureEdges.query(Rectangle(pos - searchDistance, pos + searchDistance), move(edges));
+      if(!edges.empty)
+      {
+        auto closestEdge = edges.front;
+        auto closestDistance = closestEdge.distance(pos);
+        edges.popFront();
+        foreach(edge; edges)
+        {
+          float dist = edge.distance(pos);
+          if(dist < closestDistance)
+          {
+            closestDistance = dist;
+            closestEdge = edge;
+          }
+        }
+        if(closestDistance <= maxDist)
+        {
+          auto triangleData = g_scene.triangleData[closestEdge.triangleIndex];
+          auto triangle = g_scene.triangles[closestEdge.triangleIndex];
+
+          auto uv = computeUV(pos, triangleData.tex[0], triangleData.tex[2], triangleData.tex[1]);
+          pixel.position = extrapolate(uv.x, uv.y, triangle.v0, triangle.v1, triangle.v2);
+          pixel.normal = extrapolate(uv.x, uv.y, triangleData.n[0], triangleData.n[1], triangleData.n[2]);
+          //pixel.color = pixel.normal * 0.5f + vec3(0.5f);
+          pixel.rastered = true;
+          //pixel.color = vec3(closestDistance / maxDist, 1, 1);
+          //vec2 uv2 = uv * 0.5f + vec2(0.5f);
+          //pixel.color = vec3(uv2.x, uv2.y, 0.0f);
+          pixel.color = pixel.position * (1.0f / 20.0f) + vec3(0.5f);
+          //pixel.color = vec3(cast(float)closestEdge.triangleIndex / cast(float)g_scene.triangles.length);
+        }
+      }
+    }
+  }
+}
+
+void takeSamples(uint offset, Pixel[] pixels, ref Random gen)
 {
   vec2[] pattern = (cast(vec2*)alloca(vec2.sizeof * numSamples*2))[0..numSamples*2];
   foreach(ref pixel; pixels)
@@ -457,16 +607,15 @@ void takeSamples(Pixel[] pixels, ref Random gen)
 	    float hitDistance = 0.0f;
 	    vec2 hitTexcoords;
 	    const(Scene.TriangleData)* hitData;
-	    if( g_scene.trace(sampleRay, hitDistance, hitTexcoords, hitData))
+      auto traceResult = g_scene.trace(sampleRay, hitDistance, hitTexcoords, hitData, IgnoreBackfaces.no);
+	    if( traceResult == TraceResult.FrontFaceHit )
       {
 		    sample = hitTexcoords;
 	    }
       else
       {
         // nothing hit
-        //sample = vec2(0.0f, 0.0f); 
-        pixel.ambient++;
-        pixel.numSkyRays++;
+        pixel.numSkippedSamples++;
         if(i < numSamples)
         {
           goto start;
@@ -486,27 +635,30 @@ void takeSamples(Pixel[] pixels, ref Random gen)
 	    float psi = pattern[i].x  * 2.0f * PI; //uniform(0, 2 * PI, gen);
 	    float phi = (pattern[i].y * 0.9f + 0.1f) * PI_2; //uniform(0, PI_2, gen);
 	    vec3 sampleDir = angleToDirection(phi, psi, pixel.normal);
-	    Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
-	    float hitDistance = 0.0f;
-	    vec2 hitTexcoords;
-	    const(Scene.TriangleData)* hitData;
-	    if( !g_scene.trace(sampleRay, hitDistance, hitTexcoords, hitData))
+      if(sampleDir.z > 0.0f)
       {
-		    pixel.ambient++;
-	    }
+	      Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
+	      if( g_scene.hitsNothing(sampleRay) )
+        {
+		      pixel.ambient++;
+	      }
+      }
     }
     for(uint j=0; j < additionalSkySamples; j++)
     {
       float psi = uniform(0, 2 * PI, gen) * 2.0f * PI;
       float phi = uniform(0, PI_2, gen) * PI_2;
       vec3 sampleDir = angleToDirection(phi, psi, pixel.normal);
-      Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
-      float hitDistance = 0.0f;
-      vec2 hitTexcoords;
-      const(Scene.TriangleData)* hitData;
-      if( !g_scene.trace(sampleRay, hitDistance, hitTexcoords, hitData))
+      if(sampleDir.z > 0.0f)
       {
-        pixel.ambient++;
+        Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
+        float hitDistance = 0.0f;
+        vec2 hitTexcoords;
+        const(Scene.TriangleData)* hitData;
+        if( g_scene.hitsNothing(sampleRay) )
+        {
+          pixel.ambient++;
+        }
       }
     }
 
@@ -550,13 +702,48 @@ void writeDDSFiles(uint width, uint height, Pixel[] pixels)
       {
         float ambient = cast(float)pixels[y * width + x].ambient / cast(float)(numSamples * 2 + additionalSkySamples);
         data[y * width * 4 + x * 4] = cast(ubyte)(ambient * 255.0f);
-        data[y * width * 4 + x * 4 + 1] = cast(ubyte)(pixels[y * width + x].numSkyRays);
+        data[y * width * 4 + x * 4 + 1] = cast(ubyte)(pixels[y * width + x].numSkippedSamples);
         data[y * width * 4 + x * 4 + 2] = cast(ubyte)0;
         data[y * width * 4 + x * 4 + 3] = cast(ubyte)0;
       }
     }
-    WriteDDS("sky.dds", width, height, DDSLoader.DXGI_FORMAT.DXGI_FORMAT_R8G8B8A8_UNORM, (cast(void*)data.ptr)[0..(width * height * 4 * ubyte.sizeof)]);
+    WriteDDS("sky.dds", width, height, DDSLoader.DXGI_FORMAT.R8G8B8A8_UNORM, (cast(void*)data.ptr)[0..(width * height * 4 * ubyte.sizeof)]);
     writefln("sky.dds written");
+  }
+
+  {
+    auto data = NewArray!float(width * height * 4);
+    scope(exit) Delete(data);
+    for(uint y=0; y<height; y++)
+    {
+      for(uint x=0; x<width; x++)
+      {
+        data[y * width * 4 + x * 4] = pixels[y * width + x].position.x;
+        data[y * width * 4 + x * 4 + 1] = pixels[y * width + x].position.y;
+        data[y * width * 4 + x * 4 + 2] = pixels[y * width + x].position.z;
+        data[y * width * 4 + x * 4 + 3] = 0.0f;
+      }
+    }
+    WriteDDS("position.dds", width, height, DDSLoader.DXGI_FORMAT.R32G32B32A32_FLOAT, (cast(void*)data.ptr)[0..(width * height * 4 * float.sizeof)]);
+    writefln("position.dds written");
+  }
+
+  {
+    auto data = NewArray!ubyte(width * height * 4);
+    scope(exit) Delete(data);
+    for(uint y=0; y<height; y++)
+    {
+      for(uint x=0; x<width; x++)
+      {
+        float ambient = cast(float)pixels[y * width + x].ambient / cast(float)(numSamples * 2 + additionalSkySamples);
+        data[y * width * 4 + x * 4] = cast(ubyte)(pixels[y * width + x].normal.x * 255.0f);
+        data[y * width * 4 + x * 4 + 1] = cast(ubyte)(pixels[y * width + x].normal.y * 255.0f);
+        data[y * width * 4 + x * 4 + 2] = cast(ubyte)(pixels[y * width + x].normal.z * 255.0f);
+        data[y * width * 4 + x * 4 + 3] = cast(ubyte)0;
+      }
+    }
+    WriteDDS("normals.dds", width, height, DDSLoader.DXGI_FORMAT.R8G8B8A8_UNORM, (cast(void*)data.ptr)[0..(width * height * 4 * ubyte.sizeof)]);
+    writefln("normals.dds written");
   }
 }
 
@@ -589,13 +776,29 @@ int main(string[] argv)
     return 1;
   }
 
+  auto timer = cast(shared(Timer))New!Timer();
+  scope(exit) Delete(timer);
+
+  auto loadSceneStart = Zeitpunkt(timer);
   loadScene();
+  auto loadSceneEnd = Zeitpunkt(timer);
+  writefln("loading the scene took %f s", (loadSceneEnd - loadSceneStart) / 1000.0f);
   allocThreadLocals();
 
   //allocate one element more for sse tone mapper
   Pixel[] pixels = NewArray!Pixel(g_width * g_height + 1)[0..$-1];
   scope(exit) Delete(pixels);
   SDL.Event event;
+
+  /*
+  // draw wireframe
+  vec2 screenSize = vec2(cast(float)g_width, cast(float)g_height);
+  foreach(edge; g_scene.textureEdges.objects)
+  {
+    drawLine(screen, edge.v[0] * screenSize, edge.v[1] * screenSize);
+  }
+  SDL.Flip(screen); */
+
 
   //rasterTriangles(39, 40, pixels);
   //rasterTriangles(2, 4, pixels);
@@ -617,6 +820,9 @@ int main(string[] argv)
     }
   }
 
+  auto rasterEnd = Zeitpunkt(timer);
+  writefln("rastering triangles took %f milliseconds", (rasterEnd - loadSceneEnd) / 1000.0f);
+
   /*while(true)
   {
     while(SDL.PollEvent(&event)) 
@@ -633,16 +839,32 @@ int main(string[] argv)
 
   writefln("computing sampling patterns...");
   precomputeSamples(gen);
-  writefln("computing sample locations...");
+  auto endComputeSamples = Zeitpunkt(timer);
+  writefln("Computing sampling patterns took %f s", (endComputeSamples - rasterEnd) / 1000.0f);
 
   uint step = 64;
   uint steps = cast(uint)(pixels.length / step);
-  ComputeOutputTask[] tasks = NewArray!ComputeOutputTask(steps);
-  auto taskIdentifier = TaskIdentifier.Create!"ComputeOutputTask"();
+
+  PerPixelTask[] edgeTasks = NewArray!PerPixelTask(steps);
+  auto edgeTaskIdentifier = TaskIdentifier.Create!"GeometryExtrapolation"();
   for(uint i=0; i < steps; i++)
   {
     auto startIndex = i * step;
-    tasks[i] = New!ComputeOutputTask(taskIdentifier, startIndex, pixels[startIndex..startIndex+step]);
+    edgeTasks[i] = New!PerPixelTask(edgeTaskIdentifier, &extrapolateGeometry, startIndex, pixels[startIndex..startIndex+step]);
+  }
+  scope(exit)
+  {
+    foreach(task; edgeTasks)
+      Delete(task);
+    Delete(edgeTasks);
+  }
+
+  PerPixelTask[] tasks = NewArray!PerPixelTask(steps);
+  auto taskIdentifier = TaskIdentifier.Create!"TakeSamples"();
+  for(uint i=0; i < steps; i++)
+  {
+    auto startIndex = i * step;
+    tasks[i] = New!PerPixelTask(taskIdentifier, &takeSamples, startIndex, pixels[startIndex..startIndex+step]);
   }
   scope(exit)
   {
@@ -674,11 +896,6 @@ int main(string[] argv)
       Delete(workers);
   }
 
-  foreach(task; tasks)
-  {
-    spawn(task);
-  }
-
   /*for(size_t i=0; i < g_height; i++)
   {
     takeSamples(pixels[g_width * i..g_width * (i+1)], gen);
@@ -686,6 +903,54 @@ int main(string[] argv)
   }*/
 
   bool run = true;
+
+  writefln("extrapolating geometry...");
+  foreach(task; edgeTasks)
+  {
+    spawn(task);
+  }
+
+  while(!edgeTaskIdentifier.allFinished && run)
+  //while(true)
+  {
+    g_localTaskQueue.executeOneTask();
+    drawScreen(screen, pixels);
+
+    while(SDL.PollEvent(&event)) 
+    {      
+      switch (event.type) 
+      {
+        case SDL.QUIT:
+          run = false;
+          break;
+          /*case SDL.KEYDOWN:
+          run = false;
+          break;*/
+        default:
+      }
+    }
+  }
+  if(!run)
+  {
+    g_run = false;
+
+    foreach(worker; workers)
+    {
+      worker.join(false);
+    }
+
+    return 1;
+  }
+  auto endGeometryExtrapolation = Zeitpunkt(timer);
+  writefln("extrapolating geometry took %f s", (endGeometryExtrapolation - endComputeSamples) / 1000.0f);
+
+  // take samples
+  writefln("computing sample locations...");
+  foreach(task; tasks)
+  {
+    spawn(task);
+  }
+
   while(!taskIdentifier.allFinished && run)
   {
     g_localTaskQueue.executeOneTask();
@@ -705,18 +970,35 @@ int main(string[] argv)
       }
     }
   }
+  if(!run)
+  {
+    g_run = false;
+
+    foreach(worker; workers)
+    {
+      worker.join(false);
+    }
+
+    return 1;
+  }
+
+  auto endTakeSamples = Zeitpunkt(timer);
+  writefln("Computing samples and ambient took %f s", (endTakeSamples - endGeometryExtrapolation) / 1000.0f);
 
   writeDDSFiles(g_width, g_height, pixels);
+  auto endWriteData = Zeitpunkt(timer);
+  writefln("writing data took %f s", (endWriteData - endTakeSamples) / 1000.0f);
+  writefln("total time taken %f s", (endWriteData - loadSceneStart) / 1000.0f);
 
   /*uint progress = 0;
   uint step = g_width * 4;
   uint steps = cast(uint)(pixels.length / step);
-  ComputeOutputTask[] tasks = NewArray!ComputeOutputTask(steps);
-  auto taskIdentifier = TaskIdentifier.Create!"ComputeOutputTask"();
+  PerPixelTask[] tasks = NewArray!PerPixelTask(steps);
+  auto taskIdentifier = TaskIdentifier.Create!"PerPixelTask"();
   for(uint i=0; i < steps; i++)
   {
     auto startIndex = i * step;
-    tasks[i] = New!ComputeOutputTask(taskIdentifier, startIndex, pixels[startIndex..startIndex+step]);
+    tasks[i] = New!PerPixelTask(taskIdentifier, startIndex, pixels[startIndex..startIndex+step]);
   }
   scope(exit)
   {
@@ -746,9 +1028,6 @@ int main(string[] argv)
     if(g_numThreads > 1)
       Delete(workers);
   }*/
-
-  auto timer = cast(shared(Timer))New!Timer();
-  scope(exit) Delete(timer);
 
   float totalTime = 0.0f;
 
@@ -780,7 +1059,6 @@ int main(string[] argv)
 
   auto endRendering = Zeitpunkt(timer);
   SDL.Quit();
-  writefln("Rendering took %f seconds", (endRendering - startRendering) / 1000.0f);
 
   core.stdc.stdlib.system("pause");
 

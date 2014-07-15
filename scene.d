@@ -11,6 +11,7 @@ import thBase.math;
 import thBase.logging;
 import thBase.container.vector;
 import thBase.container.octree;
+import thBase.container.quadtree;
 import thBase.policies.hashing;
 import thBase.allocator;
 import thBase.io;
@@ -51,6 +52,53 @@ static ~this()
 {
   Delete(g_readFrom);
   Delete(g_writeTo);
+}
+
+enum TraceResult
+{
+  FrontFaceHit,
+  BackFaceHit,
+  NoHit
+}
+
+enum IgnoreBackfaces : bool
+{
+  no = false,
+  yes = true
+}
+
+class Edge2D
+{
+public:
+  Rectangle bounds;
+  vec2[2] v;
+  vec2 n;
+  float len;
+  uint triangleIndex;
+  uint side;
+
+
+  this(vec2 v0, vec2 v1, uint triangleIndex, uint side)
+  {
+    v[0] = v0;
+    v[1] = v1;
+    n = (v1 - v0).normalized;
+    len = (v1 - v0).length;
+    bounds = Rectangle(minimum(v0, v1), maximum(v0, v1));
+    this.triangleIndex = triangleIndex;
+    this.side = side;
+  }
+
+  float distance(vec2 point)
+  {
+    auto v0p = v[0] - point;
+    float t = v0p.dot(n);
+    if(t > 0.0f)
+      return v0p.length;
+    if(-t > len)
+      return (v[1] - point).length;
+    return (v0p - (t * n)).length;
+  }
 }
 
 class Scene
@@ -103,9 +151,13 @@ class Scene
   Material[] m_materials;
   Node* m_rootNode;
   rcstring[] m_materialNames;
+  QuadTree!(Edge2D, StdQuadTreePolicy, ReferenceHashPolicy) m_textureEdges;
 
-  this(const(char)[] path, MaterialFunc matFunc)
+  this(const(char)[] path, MaterialFunc matFunc, mat4 modelMatrix)
   {
+    auto timer = cast(shared(Timer))New!Timer();
+    scope(exit) Delete(timer);
+
     if(path.endsWith("tree", CaseSensitive.no))
     {
       loadTree(path, matFunc);
@@ -165,7 +217,7 @@ class Scene
       {
         auto curNode = leaf;
         //mat4 transform = mat4.Identity().Right2Left();
-        mat4 transform = loader.modelData.rootNode.transform;// * transform;
+        mat4 transform = loader.modelData.rootNode.transform * modelMatrix;
         while(curNode !is null && curNode != loader.modelData.rootNode)
         {
           transform = curNode.transform * transform;
@@ -188,7 +240,7 @@ class Scene
 
           foreach(size_t i, ref vertex; vertices)
           {
-            vertex = transform * mesh.vertices[i];
+            vertex = transform.transformPosition(mesh.vertices[i]);
             minBounds = minimum(minBounds, vertex);
             maxBounds = maximum(maxBounds, vertex);
             boundingRadius = max(boundingRadius, vertex.length);
@@ -242,9 +294,6 @@ class Scene
       uint nextNode = m_triangles.length;
       auto remainingNodes = ThreadLocalStackAllocator.globalInstance.AllocatorNew!(Vector!(Node*))();
       scope(exit) ThreadLocalStackAllocator.globalInstance.AllocatorDelete(remainingNodes);
-
-      auto timer = cast(shared(Timer))New!Timer();
-      scope(exit) Delete(timer);
 
       auto startTime = Zeitpunkt(timer);
 
@@ -549,10 +598,35 @@ class Scene
       writefln("Building tree took %f seconds", (endTime - startTime) / 1000.0f);
     }
     linearizeNodes();
+
+    // write texture space edges to quad tree
+    writefln("Building texture space quad tree ...");
+    auto startQuadTree = Zeitpunkt(timer);
+    m_textureEdges = New!(typeof(m_textureEdges))();
+    auto tenth = m_data.length / 10;
+    auto next = tenth;
+    foreach(size_t i, triangle; m_data)
+    {
+      m_textureEdges.insert(New!Edge2D(triangle.tex[0], triangle.tex[1], i, 0));
+      m_textureEdges.insert(New!Edge2D(triangle.tex[1], triangle.tex[2], i, 0));
+      m_textureEdges.insert(New!Edge2D(triangle.tex[2], triangle.tex[0], i, 0));
+      if(i > next)
+      {
+        writefln("%d %%", next / tenth * 10);
+        next += tenth;
+      }
+    }
+    m_textureEdges.optimize();
+    writefln("Building quad tree took %f seconds", (Zeitpunkt(timer) - startQuadTree) / 1000.0f);
   }
 
   ~this()
   {
+    foreach(edge; m_textureEdges.objects)
+    {
+      Delete(edge);
+    }
+    Delete(m_textureEdges);
     Delete(m_data);
     Delete(m_triangles);
     Delete(m_nodes);
@@ -631,7 +705,7 @@ class Scene
     return result;
   }
 
-  bool trace(Ray ray, ref float rayPos, ref vec2 texcoords, ref const(TriangleData)* data) const 
+  TraceResult trace(Ray ray, ref float rayPos, ref vec2 texcoords, ref const(TriangleData)* data, IgnoreBackfaces ignoreBackfaces) const 
   {
     rayPos = float.max;
     auto readFrom = g_readFrom;
@@ -640,7 +714,7 @@ class Scene
     uint numReads = 1;
     readFrom[0] = m_rootNode;
 
-    bool result = false;
+    TraceResult result = TraceResult.NoHit;
 
     while(numReads > 0)
     {
@@ -656,14 +730,15 @@ class Scene
             if( node.triangle.intersects(ray, pos, u, v) && pos < rayPos && pos >= FloatEpsilon )
             {
               auto n = node.triangle.plane.normal;
-              if(n.dot(ray.dir) < 0)
+              bool isFrontFace = n.dot(ray.dir) < 0;
+              if(!ignoreBackfaces || isFrontFace)
               {
                 rayPos = pos;
                 size_t index = cast(size_t)(node.triangle - m_triangles.ptr);
                 const(TriangleData*) ldata = &m_data[index];
                 texcoords = interpolate(u, v, ldata.tex[0], ldata.tex[1], ldata.tex[2]);
                 data = ldata;
-                result = true;
+                result = isFrontFace ? TraceResult.FrontFaceHit : TraceResult.BackFaceHit;
               }
             }
           }
@@ -813,6 +888,11 @@ class Scene
   @property const(Triangle)[] triangles() const 
   {
     return m_triangles;
+  }
+
+  auto textureEdges()
+  {
+    return m_textureEdges;
   }
 
   /**
