@@ -24,8 +24,11 @@ import scene;
 
 enum uint numSamples = 32;
 enum uint additionalSkySamples = 512;
-enum bool extrapolateGeometryEnabled = false;
-enum bool useBlackAmbient = false;
+enum bool extrapolateGeometryEnabled = true;
+enum bool useBlackAmbient = true;
+enum bool useCosineDistribution = false;
+
+__gshared vec2 g_blackPixelLocation = vec2(1.0f, 0.0f);
 
 __gshared vec2[numSamples*2][128] g_precomputedSamples;
 
@@ -303,12 +306,33 @@ vec3 mapToCylinder(vec2 p)
   return vec3(cosf(p.x * PI * 2.0) * g_cylinderRadius, sinf(p.x * PI * 2.0) * g_cylinderRadius, p.y);
 }
 
+vec3 mapToHemisphere(vec2 p)
+{
+  float phi = p.y * PI / 2.0; // 0..90
+  float psi = p.x * PI * 2.0; // 0..360
+  float cosPhi = cosf(phi);
+  auto result = vec3(cosf(psi) * cosPhi, sinf(psi) * cosPhi, sinf(phi));
+  return result;
+}
+
 double minDistCylinder(vec2 p, vec2[] other)
 {
   float dist = (other[0].mapToCylinder - p.mapToCylinder).squaredLength;
   foreach(cur; other[1..$])
   {
     float dist2 = (cur.mapToCylinder - p.mapToCylinder).squaredLength;
+    if(dist2 < dist)
+      dist = dist2;
+  }
+  return dist;
+}
+
+float minDistHemisphere(vec2 p, vec2[] other)
+{
+  float dist = (other[0].mapToHemisphere - p.mapToHemisphere).squaredLength;
+  foreach(cur; other[1..$])
+  {
+    float dist2 = (cur.mapToHemisphere - p.mapToHemisphere).squaredLength;
     if(dist2 < dist)
       dist = dist2;
   }
@@ -345,8 +369,10 @@ void bestCanidatePattern(alias distanceFunc)(vec2[] pattern, ref Random gen)
 
 void precomputeSamples(ref Random gen)
 {
+  char[1024] buffer;
+  auto len = formatStatic(buffer, "samples_%s.dat", useCosineDistribution ? "cos" : "even"); 
   {
-    auto samplesFile = RawFile("samples.dat", "rb");
+    auto samplesFile = RawFile(buffer[0..len], "rb");
     if(samplesFile.isOpen && samplesFile.size == g_precomputedSamples.sizeof)
     {
       samplesFile.readArray(g_precomputedSamples[]);
@@ -357,9 +383,12 @@ void precomputeSamples(ref Random gen)
   foreach(size_t i, ref samples; g_precomputedSamples)
   {
     writefln("pattern %d of %d", i, g_precomputedSamples.length);
-    bestCanidatePattern!minDistCylinder(samples, gen);
+    static if(useCosineDistribution)
+      bestCanidatePattern!minDistCylinder(samples, gen);
+    else
+      bestCanidatePattern!minDistHemisphere(samples, gen);
   }
-  auto samplesFile = RawFile("samples.dat", "wb");
+  auto samplesFile = RawFile(buffer[0..len], "wb");
   samplesFile.writeArray(g_precomputedSamples[]);
 }
 
@@ -519,11 +548,11 @@ void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
         curPixel.position = interpolate(uv.x, uv.y, wsPos[0], wsPos[1], wsPos[2]);
         curPixel.normal = interpolate(uv.x, uv.y, t.n[0], t.n[1], t.n[2]);
         vec2 coords = interpolate(uv.x, uv.y, t.tex[0], t.tex[1], t.tex[2]);
-        curPixel.color = curPixel.position * (1.0f / 20.0f) + vec3(0.5f);
+        //curPixel.color = curPixel.position * (1.0f / 20.0f) + vec3(0.5f);
         //curPixel.color = vec3(coords.x, coords.y, 0.0f);
         //vec2 uv2 = uv * 0.5f + vec2(0.5f);
         //curPixel.color = vec3(uv2.x, uv2.y, uv2.x < 0.0f || uv2.y < 0.0f ? 1.0f : 0.0f);
-        //curPixel.color = curPixel.normal * 0.5f + vec3(0.5f);
+        curPixel.color = curPixel.normal * 0.5f + vec3(0.5f);
         //curPixel.color = vec3(1.0f, 0.0f, 0.0f);
         //curPixel.color = t.n[0] * 0.5f + vec3(0.5f);
         //curPixel.color = vec3(cast(float)i / cast(float)g_scene.triangles.length);
@@ -575,12 +604,12 @@ void extrapolateGeometry(uint offset, Pixel[] pixels, ref Random gen)
           auto uv = computeUV(pos, triangleData.tex[0], triangleData.tex[2], triangleData.tex[1]);
           pixel.position = extrapolate(uv.x, uv.y, triangle.v0, triangle.v1, triangle.v2);
           pixel.normal = extrapolate(uv.x, uv.y, triangleData.n[0], triangleData.n[1], triangleData.n[2]);
-          //pixel.color = pixel.normal * 0.5f + vec3(0.5f);
+          pixel.color = pixel.normal * 0.5f + vec3(0.5f);
           pixel.rastered = true;
           //pixel.color = vec3(closestDistance / maxDist, 1, 1);
           //vec2 uv2 = uv * 0.5f + vec2(0.5f);
           //pixel.color = vec3(uv2.x, uv2.y, 0.0f);
-          pixel.color = pixel.position * (1.0f / 20.0f) + vec3(0.5f);
+          //pixel.color = pixel.position * (1.0f / 20.0f) + vec3(0.5f);
           //pixel.color = vec3(cast(float)closestEdge.triangleIndex / cast(float)g_scene.triangles.length);
         }
       }
@@ -614,17 +643,21 @@ void takeSamples(uint offset, Pixel[] pixels, ref Random gen)
       {
 		    sample = hitTexcoords;
 	    }
+      else if(traceResult == TraceResult.BackFaceHit )
+      {
+        sample = g_blackPixelLocation;
+      }
       else
       {
         // nothing hit
-        pixel.numSkippedSamples++;
         if(i < numSamples)
         {
+          pixel.numSkippedSamples++;
           goto start;
         }
         else
         {
-          sample = vec2(0.0f, 0.0f);
+          sample = g_blackPixelLocation;
         }
       }
       /*if(i==1)
@@ -743,10 +776,10 @@ void writeDDSFiles(uint width, uint height, Pixel[] pixels)
     {
       for(uint x=0; x<width; x++)
       {
-        float ambient = cast(float)pixels[y * width + x].ambient / cast(float)(numSamples * 2 + additionalSkySamples);
-        data[y * width * 4 + x * 4] = cast(ubyte)(pixels[y * width + x].normal.x * 255.0f);
-        data[y * width * 4 + x * 4 + 1] = cast(ubyte)(pixels[y * width + x].normal.y * 255.0f);
-        data[y * width * 4 + x * 4 + 2] = cast(ubyte)(pixels[y * width + x].normal.z * 255.0f);
+        vec3 normal = pixels[y * width + x].normal * 0.5f + vec3(0.5f);
+        data[y * width * 4 + x * 4] = cast(ubyte)(normal.x * 255.0f);
+        data[y * width * 4 + x * 4 + 1] = cast(ubyte)(normal.y * 255.0f);
+        data[y * width * 4 + x * 4 + 2] = cast(ubyte)(normal.z * 255.0f);
         data[y * width * 4 + x * 4 + 3] = cast(ubyte)0;
       }
     }
@@ -955,6 +988,9 @@ int main(string[] argv)
   auto endGeometryExtrapolation = Zeitpunkt(timer);
   static if(extrapolateGeometryEnabled)
     writefln("extrapolating geometry took %f s", (endGeometryExtrapolation - endComputeSamples) / 1000.0f);
+
+  pixels[g_width-1].rastered = false;
+  pixels[g_width-1].position = vec3(-float.max);
 
   // take samples
   writefln("computing sample locations...");

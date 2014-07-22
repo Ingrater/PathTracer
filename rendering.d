@@ -14,8 +14,8 @@ import thBase.container.vector;
 // global variables
 __gshared Camera g_camera;
 __gshared Scene g_scene;
-__gshared uint g_width = 512;
-__gshared uint g_height = 512;
+__gshared uint g_width = 128;
+__gshared uint g_height = 128;
 __gshared uint g_numThreads = 8;
 
 // Holds all information for a single pixel visible on the screen
@@ -77,10 +77,10 @@ void loadScene()
   g_camera = New!Camera(30.0f, cast(float)g_height / cast(float)g_width);
 
   g_camera.setTransform(vec3(-660, -350, 600), vec3(-658, -349, 599.8), vec3(0, 0, 1));
-  //g_scene = New!Scene("cornell-box-textured.thModel", &fillMaterial, mat4.Identity);
+  g_scene = New!Scene("cornell-box-textured.thModel", &fillMaterial, mat4.Identity);
   //g_scene = New!Scene("citymap.thModel", &fillMaterial, ScaleMatrix(0.1f, 0.1f, 0.1f));
   //g_scene.saveTree("citymap.tree");
-  g_scene = New!Scene("citymap.tree", &fillMaterial, mat4.Identity);
+  //g_scene = New!Scene("citymap.tree", &fillMaterial, mat4.Identity);
 
   //find all light triangles
   /*auto lightTriangles = New!(Vector!LightTriangle)();
