@@ -10,12 +10,13 @@ import std.random;
 import std.math;
 import core.stdc.math;
 import thBase.container.vector;
+import thBase.math : max;
 
 // global variables
 __gshared Camera g_camera;
 __gshared Scene g_scene;
-__gshared uint g_width = 128;
-__gshared uint g_height = 128;
+__gshared uint g_width = 512;
+__gshared uint g_height = 512;
 __gshared uint g_numThreads = 8;
 
 // Holds all information for a single pixel visible on the screen
@@ -77,10 +78,10 @@ void loadScene()
   g_camera = New!Camera(30.0f, cast(float)g_height / cast(float)g_width);
 
   g_camera.setTransform(vec3(-660, -350, 600), vec3(-658, -349, 599.8), vec3(0, 0, 1));
-  g_scene = New!Scene("cornell-box-textured.thModel", &fillMaterial, mat4.Identity);
+  //g_scene = New!Scene("cornell-box-textured.thModel", &fillMaterial, mat4.Identity);
   //g_scene = New!Scene("citymap.thModel", &fillMaterial, ScaleMatrix(0.1f, 0.1f, 0.1f));
   //g_scene.saveTree("citymap.tree");
-  //g_scene = New!Scene("citymap.tree", &fillMaterial, mat4.Identity);
+  g_scene = New!Scene("citymap.tree", &fillMaterial, mat4.Identity);
 
   //find all light triangles
   /*auto lightTriangles = New!(Vector!LightTriangle)();
@@ -201,6 +202,50 @@ phi = 0..90
 (       0         0   1)     (sin(phi))  =  (sin(phi)           )
 */
 
+vec2 ConcentricSampleDisk(vec2 uv)
+{
+  uv = uv * 2.0f - vec2(1.0f);
+  float r, theta;
+  if(uv.x == 0.0f && uv.y == 0.0f)
+    return vec2(0.0f);
+
+  if(uv.x >= -uv.y) 
+  {
+    if(uv.x > uv.y)
+    {
+      r = uv.x;
+      theta = (uv.y > 0.0f) ? theta = uv.y / r : 8.0f + uv.y / r;
+    }
+    else
+    {
+      r = uv.y;
+      theta = 2.0f - uv.x / r;
+    }
+  }
+  else
+  {
+    if(uv.x <= uv.y)
+    {
+      r = -uv.x;
+      theta = 4.0f - uv.y / r;
+    }
+    else
+    {
+      r = -uv.y;
+      theta = 6.0f + uv.x / r;
+    }
+  }
+  theta *= PI / 4.0f;
+  return vec2(r * cosf(theta), r * sinf(theta));
+}
+
+vec3 CosineSampleHemisphere(vec2 uv)
+{
+  auto result = vec3(ConcentricSampleDisk(uv), 0.0f);
+  result.z = sqrtf(max(0.0f, 1.0f - result.x * result.x - result.y * result.y));
+  return result;
+}
+
 vec3 angleToLocalDirection(float phi, float psi)
 {
   float cosPhi = cosf(phi);
@@ -208,11 +253,8 @@ vec3 angleToLocalDirection(float phi, float psi)
   return result;
 }
 
-vec3 angleToDirection(float phi, float psi, ref const(vec3) normal)
+vec3 toWorldSpace(vec3 localDir, ref const(vec3) normal)
 {
-  float cosPhi = cosf(phi);
-  auto localDir = vec3(cosf(psi) * cosPhi, sinf(psi) * cosPhi, sinf(phi));
-
   auto up = normal;
   auto dir = vec3(1,0,0);
   if(abs(dir.dot(up)) > 0.9f)
@@ -262,7 +304,7 @@ vec3 sampleSky(vec3 dir)
 
 enum float BRDF = 1.0f / PI;
 
-vec3 computeLrefl(vec3 pos, vec3 theta, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
+/*vec3 computeLrefl(vec3 pos, vec3 theta, ref const(vec3) normal, const(Scene.TriangleData)* data, ref Random gen, uint depth)
 {
   return computeLdirect(pos, theta, normal, data, gen) +
          computeLindirect(pos, theta, normal, data, gen, depth);
@@ -370,7 +412,7 @@ void computeL(uint pixelIndex, ref Pixel pixel, ref Random gen)
 	}
 	pixel.n += 1;
 	pixel.color = pixel.sum / pixel.n;
-}
+}*/
 
 /**
 * computes the output color of the generated image
@@ -380,10 +422,10 @@ void computeL(uint pixelIndex, ref Pixel pixel, ref Random gen)
 *  pixels = the pixels that should be computed
 *  gen = the random number generator
 */
-void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
+/*void computeOutputColor(uint pixelOffset, Pixel[] pixels, ref Random gen)
 {
   foreach(uint pixelIndex, ref pixel; pixels)
   {
     computeL(pixelOffset + pixelIndex, pixel, gen);
   }                          
-}
+}*/

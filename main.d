@@ -25,7 +25,7 @@ import scene;
 enum uint numSamples = 32;
 enum uint additionalSkySamples = 512;
 enum bool extrapolateGeometryEnabled = true;
-enum bool useBlackAmbient = true;
+enum bool useBlackAmbient = false;
 enum bool useCosineDistribution = false;
 
 __gshared vec2 g_blackPixelLocation = vec2(1.0f, 0.0f);
@@ -315,6 +315,18 @@ vec3 mapToHemisphere(vec2 p)
   return result;
 }
 
+float minDist2D(vec2 p, vec2[] other)
+{
+  float dist = (other[0] - p).squaredLength;
+  foreach(cur; other[1..$])
+  {
+    float dist2 = (cur - p).squaredLength;
+    if(dist2 < dist)
+      dist = dist2;
+  }
+  return dist;
+}
+
 double minDistCylinder(vec2 p, vec2[] other)
 {
   float dist = (other[0].mapToCylinder - p.mapToCylinder).squaredLength;
@@ -370,7 +382,8 @@ void bestCanidatePattern(alias distanceFunc)(vec2[] pattern, ref Random gen)
 void precomputeSamples(ref Random gen)
 {
   char[1024] buffer;
-  auto len = formatStatic(buffer, "samples_%s.dat", useCosineDistribution ? "cos" : "even"); 
+  //auto len = formatStatic(buffer, "samples_%s.dat", useCosineDistribution ? "cos" : "even"); 
+  auto len = formatStatic(buffer, "samples.dat"); 
   {
     auto samplesFile = RawFile(buffer[0..len], "rb");
     if(samplesFile.isOpen && samplesFile.size == g_precomputedSamples.sizeof)
@@ -383,10 +396,11 @@ void precomputeSamples(ref Random gen)
   foreach(size_t i, ref samples; g_precomputedSamples)
   {
     writefln("pattern %d of %d", i, g_precomputedSamples.length);
-    static if(useCosineDistribution)
+    bestCanidatePattern!minDist2D(samples, gen);
+    /*static if(useCosineDistribution)
       bestCanidatePattern!minDistCylinder(samples, gen);
     else
-      bestCanidatePattern!minDistHemisphere(samples, gen);
+      bestCanidatePattern!minDistHemisphere(samples, gen);*/
   }
   auto samplesFile = RawFile(buffer[0..len], "wb");
   samplesFile.writeArray(g_precomputedSamples[]);
@@ -630,10 +644,8 @@ void takeSamples(uint offset, Pixel[] pixels, ref Random gen)
     foreach(ref sample; pixel.samples)
     {
       start:
-	    float psi = pattern[i].x  * 2.0f * PI; //uniform(0, 2 * PI, gen);
-	    float phi = (pattern[i].y * 0.9f + 0.1f) * PI_2; //uniform(0, PI_2, gen);
       i++;
-	    vec3 sampleDir = angleToDirection(phi, psi, pixel.normal);
+	    vec3 sampleDir = toWorldSpace(CosineSampleHemisphere(pattern[i]), pixel.normal);
 	    Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
 	    float hitDistance = 0.0f;
 	    vec2 hitTexcoords;
@@ -669,9 +681,7 @@ void takeSamples(uint offset, Pixel[] pixels, ref Random gen)
     {
       for(; i < numSamples * 2; i++)
       {
-	      float psi = pattern[i].x  * 2.0f * PI; //uniform(0, 2 * PI, gen);
-	      float phi = (pattern[i].y * 0.9f + 0.1f) * PI_2; //uniform(0, PI_2, gen);
-	      vec3 sampleDir = angleToDirection(phi, psi, pixel.normal);
+	      vec3 sampleDir = toWorldSpace(CosineSampleHemisphere(pattern[i]), pixel.normal);
         if(sampleDir.z > 0.0f)
         {
 	        Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
@@ -683,9 +693,7 @@ void takeSamples(uint offset, Pixel[] pixels, ref Random gen)
       }
       for(uint j=0; j < additionalSkySamples; j++)
       {
-        float psi = uniform(0, 2 * PI, gen) * 2.0f * PI;
-        float phi = uniform(0, PI_2, gen) * PI_2;
-        vec3 sampleDir = angleToDirection(phi, psi, pixel.normal);
+        vec3 sampleDir = toWorldSpace(CosineSampleHemisphere(vec2(uniform(0.0f, 1.0f, gen), uniform(0.0f, 1.0f, gen))), pixel.normal);
         if(sampleDir.z > 0.0f)
         {
           Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
