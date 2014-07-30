@@ -26,7 +26,7 @@ enum uint numSamples = 32;
 enum uint additionalSkySamples = 512;
 enum bool extrapolateGeometryEnabled = true;
 enum bool useBlackAmbient = false;
-enum bool useCosineDistribution = false;
+enum bool useCosineDistribution = true;
 
 __gshared vec2 g_blackPixelLocation = vec2(1.0f, 0.0f);
 
@@ -560,7 +560,7 @@ void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
         auto curPixel = &pixels[y * g_width + x];
         curPixel.rastered = true;
         curPixel.position = interpolate(uv.x, uv.y, wsPos[0], wsPos[1], wsPos[2]);
-        curPixel.normal = interpolate(uv.x, uv.y, t.n[0], t.n[1], t.n[2]);
+        curPixel.normal = interpolate(uv.x, uv.y, t.n[0], t.n[1], t.n[2]).normalized;
         vec2 coords = interpolate(uv.x, uv.y, t.tex[0], t.tex[1], t.tex[2]);
         //curPixel.color = curPixel.position * (1.0f / 20.0f) + vec3(0.5f);
         //curPixel.color = vec3(coords.x, coords.y, 0.0f);
@@ -617,7 +617,7 @@ void extrapolateGeometry(uint offset, Pixel[] pixels, ref Random gen)
 
           auto uv = computeUV(pos, triangleData.tex[0], triangleData.tex[2], triangleData.tex[1]);
           pixel.position = extrapolate(uv.x, uv.y, triangle.v0, triangle.v1, triangle.v2);
-          pixel.normal = extrapolate(uv.x, uv.y, triangleData.n[0], triangleData.n[1], triangleData.n[2]);
+          pixel.normal = extrapolate(uv.x, uv.y, triangleData.n[0], triangleData.n[1], triangleData.n[2]).normalized;
           pixel.color = pixel.normal * 0.5f + vec3(0.5f);
           pixel.rastered = true;
           //pixel.color = vec3(closestDistance / maxDist, 1, 1);

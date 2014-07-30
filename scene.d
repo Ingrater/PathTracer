@@ -248,7 +248,7 @@ class Scene
 
           foreach(size_t i, ref normal; normals)
           {
-            normal = normalMatrix * mesh.normals[i];
+            normal = (normalMatrix * mesh.normals[i]).normalized;
           }
 
 		      foreach(size_t i,ref face; triangles)
