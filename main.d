@@ -11,6 +11,7 @@ import thBase.math3d.all;
 import thBase.algorithm;
 import thBase.dds;
 import thBase.format;
+import thBase.asserthandler;
 import core.thread;
 static import core.cpuid;
 
@@ -23,16 +24,28 @@ import rendering;
 import scene;
 
 enum uint numSamples = 32;
-enum uint additionalSkySamples = 512;
+enum uint additionalSkySamples = 256;
 enum bool extrapolateGeometryEnabled = true;
 enum bool useBlackAmbient = false;
 enum bool useCosineDistribution = true;
 
 __gshared vec2 g_blackPixelLocation = vec2(1.0f, 0.0f);
 
-__gshared vec2[numSamples*2][128] g_precomputedSamples;
+
+enum uint numPrecomputedSamples = 512;
+__gshared vec2[512][128] g_precomputedSamples;
 
 //version = PerformanceTest;
+
+uint g_workerId = 0;
+struct PerWorkerData
+{
+  uint wastedSamples = 0;
+  uint backfaceSamples = 0;
+  uint totalSamples = 0;
+  byte[256-8] padding;
+}
+PerWorkerData[16] g_perWorkerData;
 
 void setPixel(SDL.Surface *screen, int x, int y, ubyte r, ubyte g, ubyte b)
 {
@@ -199,13 +212,16 @@ class PerPixelTask : Task
 // Worker thread
 class Worker : Thread
 {
-  this()
+  uint m_id;
+  this(uint id)
   {
+    m_id = id;
     super(&run);
   }
 
   void run()
   {
+    g_workerId = m_id;
     g_localTaskQueue.executeTasksUntil( (){ return !g_run; } );
   }
 }
@@ -633,7 +649,8 @@ void extrapolateGeometry(uint offset, Pixel[] pixels, ref Random gen)
 
 void takeSamples(uint offset, Pixel[] pixels, ref Random gen)
 {
-  vec2[] pattern = (cast(vec2*)alloca(vec2.sizeof * numSamples*2))[0..numSamples*2];
+  vec2[] pattern = (cast(vec2*)alloca(vec2.sizeof * numPrecomputedSamples))[0..numPrecomputedSamples];
+  PerWorkerData* perWorkerData = &g_perWorkerData[g_workerId];
   foreach(ref pixel; pixels)
   {
     if(!pixel.rastered)
@@ -651,6 +668,7 @@ void takeSamples(uint offset, Pixel[] pixels, ref Random gen)
 	    vec2 hitTexcoords;
 	    const(Scene.TriangleData)* hitData;
       auto traceResult = g_scene.trace(sampleRay, hitDistance, hitTexcoords, hitData, IgnoreBackfaces.no);
+      perWorkerData.totalSamples++;
 	    if( traceResult == TraceResult.FrontFaceHit )
       {
 		    sample = hitTexcoords;
@@ -658,11 +676,12 @@ void takeSamples(uint offset, Pixel[] pixels, ref Random gen)
       else if(traceResult == TraceResult.BackFaceHit )
       {
         sample = g_blackPixelLocation;
+        perWorkerData.backfaceSamples++;
       }
       else
       {
         // nothing hit
-        if(i < numSamples)
+        if(i < numPrecomputedSamples - numSamples)
         {
           pixel.numSkippedSamples++;
           goto start;
@@ -670,6 +689,7 @@ void takeSamples(uint offset, Pixel[] pixels, ref Random gen)
         else
         {
           sample = g_blackPixelLocation;
+          perWorkerData.wastedSamples++;
         }
       }
       /*if(i==1)
@@ -679,7 +699,7 @@ void takeSamples(uint offset, Pixel[] pixels, ref Random gen)
     }
     static if(!useBlackAmbient)
     {
-      for(; i < numSamples * 2; i++)
+      for(; i < numPrecomputedSamples; i++)
       {
 	      vec3 sampleDir = toWorldSpace(CosineSampleHemisphere(pattern[i]), pixel.normal);
         if(sampleDir.z > 0.0f)
@@ -708,7 +728,7 @@ void takeSamples(uint offset, Pixel[] pixels, ref Random gen)
       }
     }
 
-    pixel.color = vec3((cast(float)pixel.ambient / cast(float)(numSamples * 2 + additionalSkySamples)), 
+    pixel.color = vec3((cast(float)pixel.ambient / cast(float)(numPrecomputedSamples + additionalSkySamples)), 
                        0.0f, //(cast(float)pixel.numSkyRays / cast(float)(numSamples*2)), 
                        0.0f);
   }
@@ -739,8 +759,9 @@ void writeDDSFiles(uint width, uint height, Pixel[] pixels)
     }
   }
 
+  uint maxSkippedSamples = 0;
   {
-    auto data = NewArray!ubyte(width * height * 4);
+    auto data = NewArray!ushort(width * height * 2);
     scope(exit) Delete(data);
     for(uint y=0; y<height; y++)
     {
@@ -749,16 +770,17 @@ void writeDDSFiles(uint width, uint height, Pixel[] pixels)
         static if(useBlackAmbient)
           float ambient = 0.0f;
         else
-          float ambient = cast(float)pixels[y * width + x].ambient / cast(float)(numSamples * 2 + additionalSkySamples);
-        data[y * width * 4 + x * 4] = cast(ubyte)(ambient * 255.0f);
-        data[y * width * 4 + x * 4 + 1] = cast(ubyte)(pixels[y * width + x].numSkippedSamples);
-        data[y * width * 4 + x * 4 + 2] = cast(ubyte)0;
-        data[y * width * 4 + x * 4 + 3] = cast(ubyte)0;
+          float ambient = cast(float)pixels[y * width + x].ambient / cast(float)(numPrecomputedSamples + additionalSkySamples);
+        data[y * width * 2 + x * 2] = cast(ushort)(ambient * 65535.0f);
+        data[y * width * 2 + x * 2 + 1] = cast(ushort)(pixels[y * width + x].numSkippedSamples);
+        if(pixels[y * width + x].rastered)
+          maxSkippedSamples = max(maxSkippedSamples, pixels[y * width + x].numSkippedSamples);
       }
     }
-    WriteDDS("sky.dds", width, height, DDSLoader.DXGI_FORMAT.R8G8B8A8_UNORM, (cast(void*)data.ptr)[0..(width * height * 4 * ubyte.sizeof)]);
+    WriteDDS("sky.dds", width, height, DDSLoader.DXGI_FORMAT.R16G16_UNORM, (cast(void*)data.ptr)[0..(width * height * 2 * ushort.sizeof)]);
     writefln("sky.dds written");
   }
+  writefln("maxSkippedSamples = %d", maxSkippedSamples);
 
   {
     auto data = NewArray!float(width * height * 4);
@@ -798,6 +820,7 @@ void writeDDSFiles(uint width, uint height, Pixel[] pixels)
 
 int main(string[] argv)
 {
+  thBase.asserthandler.Init();
   version(USE_SSE)
   {
     if(!core.cpuid.sse41)
@@ -935,7 +958,7 @@ int main(string[] argv)
     workers = NewArray!(SmartPtr!Worker)(g_numThreads-1);
     for(uint i=0; i<g_numThreads-1; i++)
     {
-      workers[i] = New!Worker();
+      workers[i] = New!Worker(i+1);
       workers[i].start();
     }
   }
@@ -1048,6 +1071,18 @@ int main(string[] argv)
   auto endWriteData = Zeitpunkt(timer);
   writefln("writing data took %f s", (endWriteData - endTakeSamples) / 1000.0f);
   writefln("total time taken %f s", (endWriteData - loadSceneStart) / 1000.0f);
+
+  uint totalSamples = 0;
+  uint wastedSamples = 0;
+  uint backfaceSamples = 0;
+  foreach(ref data; g_perWorkerData)
+  {
+    totalSamples += data.totalSamples;
+    wastedSamples += data.wastedSamples;
+    backfaceSamples += data.backfaceSamples;
+  }
+  writefln("%.2f%% of all samples wasted", cast(float)wastedSamples / cast(float)totalSamples * 100.0f);
+  writefln("%.2f%% of all samples hit a backface", cast(float)backfaceSamples / cast(float)totalSamples * 100.0f);
 
   /*uint progress = 0;
   uint step = g_width * 4;
