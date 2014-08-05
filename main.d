@@ -23,11 +23,11 @@ import sdl;
 import rendering;
 import scene;
 
-enum uint numSamples = 32;
+enum uint numSamples = 64;
 enum uint additionalSkySamples = 256;
 enum bool extrapolateGeometryEnabled = true;
 enum bool useBlackAmbient = false;
-enum bool useCosineDistribution = true;
+enum bool useCosineDistribution = false;
 
 __gshared vec2 g_blackPixelLocation = vec2(1.0f, 0.0f);
 
@@ -662,7 +662,10 @@ void takeSamples(uint offset, Pixel[] pixels, ref Random gen)
     {
       start:
       i++;
+      static if(useCosineDistribution)
 	    vec3 sampleDir = toWorldSpace(CosineSampleHemisphere(pattern[i]), pixel.normal);
+	  else
+		vec3 sampleDir = toWorldSpace(UniformSampleHemisphere(pattern[i]), pixel.normal);
 	    Ray sampleRay = Ray(pixel.position + pixel.normal * 0.1f, sampleDir);
 	    float hitDistance = 0.0f;
 	    vec2 hitTexcoords;

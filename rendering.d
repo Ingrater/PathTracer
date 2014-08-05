@@ -239,6 +239,16 @@ vec2 ConcentricSampleDisk(vec2 uv)
   return vec2(r * cosf(theta), r * sinf(theta));
 }
 
+vec3 UniformSampleHemisphere(vec2 uv)
+{
+	float z = 1.0f - 2.0f * uv.x;
+	float r = sqrtf(max(0.0f, 1.0f - z*z));
+	float phi = 2.0f * PI * uv.y;
+	float x = r * cosf(phi);
+	float y = r * sinf(phi);
+	return vec3(x, y, z);
+}
+
 vec3 CosineSampleHemisphere(vec2 uv)
 {
   auto result = vec3(ConcentricSampleDisk(uv), 0.0f);
