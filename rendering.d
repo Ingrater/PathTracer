@@ -10,6 +10,8 @@ import std.random;
 import std.math;
 import core.stdc.math;
 import thBase.container.vector;
+import thBase.container.hashmap;
+import thBase.policies.hashing;
 import thBase.math : max;
 
 // global variables
@@ -26,6 +28,7 @@ struct Pixel
   // Define additional per pixel values here
   vec3 normal;   // normal in world space
   vec3 position; // position in world space 
+  vec3 directLight; // direct light from static light sources
   float n = 0.0f;
   vec3 sum;
   vec2[numSamples] samples;
@@ -49,22 +52,25 @@ struct LightTriangle
   float area; // the area of the light triangle
   float probability;
 }
-__gshared Vector!LightTriangle g_lightTriangles;
-__gshared float g_totalLightSourceArea = 0.0f;
+__gshared Vector!LightTriangle[] g_lightTriangles;
+__gshared float g_totalLightSourceArea[];
 
 // information about sun
 __gshared vec3 g_sunDir;
 __gshared vec3 g_sunRadiance;
 __gshared vec3 g_skyRadiance;
-__gshared bool g_hasSky = true;
-__gshared bool g_hasLights = false;
+__gshared bool g_hasSky = false;
+__gshared bool g_hasLights = true;
 
 // Gets called on program shutdown
 shared static ~this()
 {
   Delete(g_camera);
   Delete(g_scene);
+  foreach(ref light; g_lightTriangles)
+    Delete(light);
   Delete(g_lightTriangles);
+  Delete(g_totalLightSourceArea);
 }
 
 
@@ -81,37 +87,61 @@ void loadScene()
   //g_scene = New!Scene("cornell-box-textured.thModel", &fillMaterial, mat4.Identity);
   //g_scene = New!Scene("citymap.thModel", &fillMaterial, ScaleMatrix(0.1f, 0.1f, 0.1f));
   //g_scene.saveTree("citymap.tree");
-  g_scene = New!Scene("citymap.tree", &fillMaterial, mat4.Identity);
+  //g_scene = New!Scene("citymap.tree", &fillMaterial, mat4.Identity);
+  g_scene = New!Scene("citymapLights.tree", &fillMaterial, mat4.Identity);
 
   //find all light triangles
-  /*auto lightTriangles = New!(Vector!LightTriangle)();
+  uint numLightMaterials = 0;
+  auto matMap = composite!(Hashmap!(const(Material)*, uint, PointerHashPolicy))(defaultCtor);
+  foreach(ref mat; g_scene.materials)
+  {
+    if(mat.emissive > 0.0f)
+    {
+      matMap[&mat] = numLightMaterials;
+      numLightMaterials++;
+    }
+  }
+
+  auto lights = NewArray!(Vector!LightTriangle)(numLightMaterials);
+  float[] totalLightSourceArea = NewArray!float(numLightMaterials);
+  totalLightSourceArea[] = 0.0f;
+  foreach(ref lightTriangles; lights)
+  {
+    lightTriangles = New!(Vector!LightTriangle)();
+  }
   foreach(size_t i, ref triangleData; g_scene.triangleData)
   {
     if(triangleData.material !is null && triangleData.material.emissive > 0.0f)
     {
+      assert(matMap.exists(triangleData.material));
+      auto lightIndex = matMap[triangleData.material];
       LightTriangle lightTriangle;
       const(Triangle)* t = &g_scene.triangles[i];
       lightTriangle.v0 = t.v0;
       lightTriangle.e1 = t.v1 - t.v0;
       lightTriangle.e2 = t.v2 - t.v0;
       lightTriangle.area = t.area;
-      lightTriangles ~= lightTriangle;
-      g_totalLightSourceArea += lightTriangle.area;
+      lights[lightIndex] ~= lightTriangle;
+      totalLightSourceArea[lightIndex] += lightTriangle.area;
     }
   }
+  g_totalLightSourceArea = totalLightSourceArea;
   // compute probabilities
-  foreach(ref light; lightTriangles)
+  foreach(size_t i, ref lightTriangles; lights)
   {
-    light.probability = light.area / g_totalLightSourceArea;
+    foreach(ref light; lightTriangles)
+    {
+      light.probability = light.area / totalLightSourceArea[i];
+    }
+    writefln("Light %d has %d light triangles", i, lightTriangles.length);
   }
-  g_lightTriangles = lightTriangles;
-  writefln("Scene has %d light triangles", lightTriangles.length);*/
+  g_lightTriangles = lights;
 }
 
-vec3 pickRandomLightPoint(ref Random gen)
+vec3 pickRandomLightPoint(ref Random gen, uint lightIndex)
 {
   float a = uniform(0.0f, 1.0f, gen);
-  foreach(ref light; g_lightTriangles)
+  foreach(ref light; g_lightTriangles[lightIndex])
   {
     if(light.probability > a)
     {
@@ -127,7 +157,7 @@ vec3 pickRandomLightPoint(ref Random gen)
     }
     a -= light.probability;
   }
-  auto light = g_lightTriangles[g_lightTriangles.length-1];
+  auto light = g_lightTriangles[lightIndex][g_lightTriangles[lightIndex].length-1];
   while(true)
   {
     float u = uniform(0.0f, 1.0f, gen);
@@ -142,31 +172,52 @@ vec3 pickRandomLightPoint(ref Random gen)
 // Called for each material found in the model file
 void fillMaterial(ref Material mat, const(char)[] materialName)
 {
+  writefln("%s", materialName);
   mat.color.x = 0.7f;
   mat.color.y = 0.7f;
   mat.color.z = 0.7f;
   mat.emissive = 0.0f;
-  if(materialName == "Light")
-  {
-    mat.emissive = 0.5f;
-  }
-  else if(materialName == "Red")
+  if(materialName == "Material #10088/City_HotelLight_mat")
   {
     mat.color.x = 0.7f;
-    mat.color.y = 0.0f;
-    mat.color.z = 0.0f;
+    mat.color.y = 0.7f;
+    mat.color.z = 0.7f;
+    mat.emissive = 10.0f;
   }
-  else if(materialName == "Green")
+  else if(materialName == "Material #10088/GreenLight")
   {
     mat.color.x = 0.0f;
     mat.color.y = 0.7f;
     mat.color.z = 0.0f;
+    mat.emissive = 10.0f;
   }
-  else if(materialName == "Blue")
+  else if(materialName == "Material #10088/City_CinemaDisplay_mat")
   {
-    mat.color.x = 0.0f;
-    mat.color.y = 0.0f;
+    mat.color.x = 0.7f;
+    mat.color.y = 0.7f;
     mat.color.z = 0.7f;
+    mat.emissive = 20.0f;
+  }
+  else if(materialName == "Material #10088/City_CinemaEntrancelamp_mat")
+  {
+    mat.color.x = 0.8f;
+    mat.color.y = 0.8f;
+    mat.color.z = 0.2f;
+    mat.emissive = 160.0f;
+  }
+  else if(materialName == "Material #10088/City_FC_Light_mat")
+  {
+    mat.color.x = 0.7f;
+    mat.color.y = 0.0f;
+    mat.color.z = 0.0F;
+    mat.emissive = 40.0f;
+  }
+  else if(materialName == "Material #10088/City_FC_Logo_mat")
+  {
+    mat.color.x = 0.7f;
+    mat.color.y = 0.0f;
+    mat.color.z = 0.0F;
+    mat.emissive = 30.0f;
   }
 }
 
@@ -364,7 +415,7 @@ vec3 computeLdirect(vec3 x, vec3 theta, ref const(vec3) normalX, const(Scene.Tri
       }
       vec3 Le = dataY.material.emissive * dataY.material.color;
       float G = normalX.dot(phi) * normalY.dot(-phi) / (lightDistance * lightDistance);
-      L = (BRDF * data.material.color) * Le * G * g_totalLightSourceArea;
+      L = (BRDF * data.material.color ) * Le * G * g_totalLightSourceArea;
     }
   }
   if(g_hasSky)

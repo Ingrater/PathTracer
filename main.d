@@ -23,17 +23,19 @@ import sdl;
 import rendering;
 import scene;
 
-enum uint numSamples = 64;
-enum uint additionalSkySamples = 256;
+enum uint numSamples = 32;
+enum uint additionalSkySamples = 512;
+enum uint directLightSamples = 128;
 enum bool extrapolateGeometryEnabled = true;
-enum bool useBlackAmbient = false;
-enum bool useCosineDistribution = false;
+enum bool useBlackAmbient = true;
+enum bool useCosineDistribution = true;
+enum bool computeDirectLightEnabled = true;
 
 __gshared vec2 g_blackPixelLocation = vec2(1.0f, 0.0f);
 
 
-enum uint numPrecomputedSamples = 512;
-__gshared vec2[512][128] g_precomputedSamples;
+enum uint numPrecomputedSamples = 1024;
+__gshared vec2[numPrecomputedSamples][128] g_precomputedSamples;
 
 //version = PerformanceTest;
 
@@ -398,8 +400,8 @@ void bestCanidatePattern(alias distanceFunc)(vec2[] pattern, ref Random gen)
 void precomputeSamples(ref Random gen)
 {
   char[1024] buffer;
-  //auto len = formatStatic(buffer, "samples_%s.dat", useCosineDistribution ? "cos" : "even"); 
-  auto len = formatStatic(buffer, "samples.dat"); 
+  auto len = formatStatic(buffer, "samples%s.dat", numPrecomputedSamples); 
+  //auto len = formatStatic(buffer, "samples.dat"); 
   {
     auto samplesFile = RawFile(buffer[0..len], "rb");
     if(samplesFile.isOpen && samplesFile.size == g_precomputedSamples.sizeof)
@@ -577,6 +579,7 @@ void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
         curPixel.rastered = true;
         curPixel.position = interpolate(uv.x, uv.y, wsPos[0], wsPos[1], wsPos[2]);
         curPixel.normal = interpolate(uv.x, uv.y, t.n[0], t.n[1], t.n[2]).normalized;
+        curPixel.directLight = t.material.color * t.material.emissive;
         vec2 coords = interpolate(uv.x, uv.y, t.tex[0], t.tex[1], t.tex[2]);
         //curPixel.color = curPixel.position * (1.0f / 20.0f) + vec3(0.5f);
         //curPixel.color = vec3(coords.x, coords.y, 0.0f);
@@ -737,6 +740,61 @@ void takeSamples(uint offset, Pixel[] pixels, ref Random gen)
   }
 }
 
+vec3 computeLDirect(vec3 x, vec3 normalX, ref Random gen)
+{
+  vec3 L;
+  for(uint lightIndex=0; lightIndex<g_lightTriangles.length; lightIndex++)
+  {
+    vec3 y = pickRandomLightPoint(gen, lightIndex);
+    float lightDistance = (y - x).length;
+    vec3 phi = (y - x).normalized();
+
+    auto shadowRay = Ray(x + normalX * FloatEpsilon, phi); 
+
+    // compute V(x, y)
+    float distanceY = 0.0f;
+    vec3 normalY;
+    const(Scene.TriangleData)* dataY;
+    if(normalX.dot(phi) > FloatEpsilon && g_scene.trace(shadowRay, distanceY, normalY, dataY))
+    {
+      if(distanceY > lightDistance - FloatEpsilon)
+      {
+        vec3 Le = dataY.material.emissive * dataY.material.color;
+        float G = normalX.dot(phi) * normalY.dot(-phi) / (lightDistance * lightDistance);
+        if(!(G > 0.0f)) G = 0.0f;
+        assert(G == G);
+        assert(G >= 0.0f);
+        L += BRDF * Le * G * g_totalLightSourceArea[lightIndex];
+      }
+    }
+  }
+  return L;
+}
+
+void computeDirectLight(uint offset, Pixel[] pixels, ref Random gen)
+{
+  foreach(ref pixel; pixels)
+  {
+    if(!pixel.rastered)
+      continue;
+    vec3 sum = vec3(0.0f);
+    for(uint i=0; i < 16; i++)
+    {
+      sum += computeLDirect(pixel.position, pixel.normal, gen); 
+    }
+    if(sum.squaredLength > FloatEpsilon)
+    {
+      for(uint i=16; i < directLightSamples; i++)
+      {
+        sum += computeLDirect(pixel.position, pixel.normal, gen); 
+      }
+    }
+    sum = sum / cast(float)directLightSamples;
+    pixel.directLight += sum;
+    pixel.color = pixel.directLight;
+  }
+}
+
 void writeDDSFiles(uint width, uint height, Pixel[] pixels)
 {
   {
@@ -818,6 +876,23 @@ void writeDDSFiles(uint width, uint height, Pixel[] pixels)
     }
     WriteDDS("normals.dds", width, height, DDSLoader.DXGI_FORMAT.R8G8B8A8_UNORM, (cast(void*)data.ptr)[0..(width * height * 4 * ubyte.sizeof)]);
     writefln("normals.dds written");
+  }
+
+  {
+    auto data = NewArray!float(width * height * 4);
+    scope(exit) Delete(data);
+    for(uint y=0; y<height; y++)
+    {
+      for(uint x=0; x<width; x++)
+      {
+        data[y * width * 4 + x * 4] = pixels[y * width + x].directLight.x;
+        data[y * width * 4 + x * 4 + 1] = pixels[y * width + x].directLight.y;
+        data[y * width * 4 + x * 4 + 2] = pixels[y * width + x].directLight.z;
+        data[y * width * 4 + x * 4 + 3] = 0.0f;
+      }
+    }
+    WriteDDS("directLight.dds", width, height, DDSLoader.DXGI_FORMAT.R32G32B32A32_FLOAT, (cast(void*)data.ptr)[0..(width * height * 4 * float.sizeof)]);
+    writefln("directLight.dds written");
   }
 }
 
@@ -948,6 +1023,20 @@ int main(string[] argv)
     Delete(tasks);
   }
 
+  PerPixelTask[] directLightTasks = NewArray!PerPixelTask(steps * 8);
+  auto directLightTaskIdentifier = TaskIdentifier.Create!"DirectLight"();
+  for(uint i=0; i < steps * 8; i++)
+  {
+    auto startIndex = i * step / 8;
+    directLightTasks[i] = New!PerPixelTask(directLightTaskIdentifier, &computeDirectLight, startIndex, pixels[startIndex..startIndex+step]);
+  }
+  scope(exit)
+  {
+    foreach(task; directLightTasks)
+      Delete(task);
+    Delete(directLightTasks);
+  }
+
   SmartPtr!(Worker)[] workers;
 
   auto threadsPerCPU = core.cpuid.threadsPerCPU;
@@ -1026,6 +1115,51 @@ int main(string[] argv)
   pixels[g_width-1].rastered = false;
   pixels[g_width-1].position = vec3(-float.max);
 
+  // compute direct light
+  static if(computeDirectLightEnabled)
+  {
+    writefln("computing direct light..");
+    foreach(task; directLightTasks)
+    {
+      spawn(task);
+    }
+
+    while(!directLightTaskIdentifier.allFinished && run)
+      //while(true)
+    {
+      g_localTaskQueue.executeOneTask();
+      drawScreen(screen, pixels);
+
+      while(SDL.PollEvent(&event)) 
+      {      
+        switch (event.type) 
+        {
+          case SDL.QUIT:
+            run = false;
+            break;
+            /*case SDL.KEYDOWN:
+            run = false;
+            break;*/
+          default:
+        }
+      }
+    }
+    if(!run)
+    {
+      g_run = false;
+
+      foreach(worker; workers)
+      {
+        worker.join(false);
+      }
+
+      return 1;
+    }
+  }
+  auto endDirectLight = Zeitpunkt(timer);
+  static if(computeDirectLightEnabled)
+    writefln("computing direct light took %f s", (endDirectLight - endGeometryExtrapolation) / 1000.0f);
+
   // take samples
   writefln("computing sample locations...");
   foreach(task; tasks)
@@ -1065,10 +1199,7 @@ int main(string[] argv)
   }
 
   auto endTakeSamples = Zeitpunkt(timer);
-  static if(extrapolateGeometryEnabled)
-    writefln("Computing samples and ambient took %f s", (endTakeSamples - endGeometryExtrapolation) / 1000.0f);
-  else
-    writefln("Computing samples and ambient took %f s", (endTakeSamples - endComputeSamples) / 1000.0f);
+  writefln("Computing samples and ambient took %f s", (endTakeSamples - endDirectLight) / 1000.0f);
 
   writeDDSFiles(g_width, g_height, pixels);
   auto endWriteData = Zeitpunkt(timer);

@@ -665,7 +665,7 @@ class Scene
             if( node.triangle.intersects(ray, pos, u, v) && pos < rayPos && pos >= FloatEpsilon )
             {
               auto n = node.triangle.plane.normal;
-              if(n.dot(ray.dir) < 0)
+              //if(n.dot(ray.dir) < 0)
               {
                 rayPos = pos;
                 size_t index = cast(size_t)(node.triangle - m_triangles.ptr);
@@ -888,6 +888,11 @@ class Scene
   @property const(Triangle)[] triangles() const 
   {
     return m_triangles;
+  }
+
+  @property const(Material)[] materials() const
+  {
+    return m_materials;
   }
 
   auto textureEdges()
