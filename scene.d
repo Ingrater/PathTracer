@@ -11,6 +11,7 @@ import thBase.math;
 import thBase.logging;
 import thBase.container.vector;
 import thBase.container.octree;
+import thBase.container.quadtree;
 import thBase.policies.hashing;
 import thBase.allocator;
 import thBase.io;
@@ -51,6 +52,92 @@ static ~this()
   Delete(g_writeTo);
 }
 
+enum TraceResult
+{
+  FrontFaceHit,
+  BackFaceHit,
+  NoHit
+}
+
+enum IgnoreBackfaces : bool
+{
+  no = false,
+  yes = true
+}
+
+auto interpolate(T)(float u, float v, T val0, T val1, T val2)
+{
+  if(u < 0.0f)
+    u = 0.0f;
+  if(v < 0.0f)
+    v = 0.0f;
+  float uv = (u + v);
+  float u1, v1;
+  if(uv != 0.0f)
+  {
+    float x = 1.0f / uv;
+    u1 = x * u;
+    v1 = x * v;
+  }
+  else
+  {
+    u1 = u;
+    v1 = v;
+  }
+  immutable float sqrt2 = 1.414213562f;
+  float d1 = sqrtf((1.0f-u1)*(1.0f-u1) + v1*v1) / sqrt2;
+  float d2 = sqrtf(u1*u1 + (1.0f-v1)*(1.0f-v1)) / sqrt2;
+  auto interpolated1 = val1 * d1 + val2 * d2;
+
+  float i1;
+  if(uv != 0.0f)
+  {
+    float len = sqrtf(u1*u1 + v1*v1);
+    i1 = sqrtf(u*u+v*v) / len; 
+  }
+  else
+  {
+    i1 = 0.0f;
+  }
+  float i2 = 1.0f - i1;
+
+  return val0 * i2 + interpolated1 * i1;
+}
+
+class Edge2D
+{
+public:
+  Rectangle bounds;
+  vec2[2] v;
+  vec2 n;
+  float len;
+  uint triangleIndex;
+  uint side;
+
+
+  this(vec2 v0, vec2 v1, uint triangleIndex, uint side)
+  {
+    v[0] = v0;
+    v[1] = v1;
+    n = (v1 - v0).normalized;
+    len = (v1 - v0).length;
+    bounds = Rectangle(minimum(v0, v1), maximum(v0, v1));
+    this.triangleIndex = triangleIndex;
+    this.side = side;
+  }
+
+  float distance(vec2 point)
+  {
+    auto v0p = v[0] - point;
+    float t = v0p.dot(n);
+    if(t > 0.0f)
+      return v0p.length;
+    if(-t > len)
+      return (v[1] - point).length;
+    return (v0p - (t * n)).length;
+  }
+}
+
 class Scene
 {
   alias void function(ref Material mat, const(char)[] materialName) MaterialFunc;
@@ -89,9 +176,10 @@ class Scene
   // Data stored for each triangle
   static struct TriangleData
   {
-    vec3 n0, n1, n2; // the normals at the three vertices of the triangle
+    vec3[3] n; // the normals at the three vertices of the triangle
     Material* material; // the material of the triangle
     mat3 localToWorld; // triangle space to world space transformation matrix
+    vec2[3] tex; // the texture coordinates at the three vertices of the trignale
   }
 
   Triangle[] m_triangles;
@@ -100,9 +188,13 @@ class Scene
   Material[] m_materials;
   Node* m_rootNode;
   rcstring[] m_materialNames;
+  QuadTree!(Edge2D, StdQuadTreePolicy, ReferenceHashPolicy) m_textureEdges;
 
-  this(const(char)[] path, MaterialFunc matFunc)
+  this(const(char)[] path, MaterialFunc matFunc, mat4 modelMatrix)
   {
+    auto timer = cast(shared(Timer))New!Timer();
+    scope(exit) Delete(timer);
+
     if(path.endsWith("tree", CaseSensitive.no))
     {
       loadTree(path, matFunc);
@@ -161,8 +253,8 @@ class Scene
       foreach(leaf; leafs)
       {
         auto curNode = leaf;
-        mat4 transform = mat4.Identity().Right2Left();
-        transform = loader.modelData.rootNode.transform * transform;
+        //mat4 transform = mat4.Identity().Right2Left();
+        mat4 transform = loader.modelData.rootNode.transform * modelMatrix;
         while(curNode !is null && curNode != loader.modelData.rootNode)
         {
           transform = curNode.transform * transform;
@@ -185,7 +277,7 @@ class Scene
 
           foreach(size_t i, ref vertex; vertices)
           {
-            vertex = transform * mesh.vertices[i];
+            vertex = transform.transformPosition(mesh.vertices[i]);
             minBounds = minimum(minBounds, vertex);
             maxBounds = maximum(maxBounds, vertex);
             boundingRadius = max(boundingRadius, vertex.length);
@@ -193,7 +285,7 @@ class Scene
 
           foreach(size_t i, ref normal; normals)
           {
-            normal = normalMatrix * mesh.normals[i];
+            normal = (normalMatrix * mesh.normals[i]).normalized;
           }
 
 		      foreach(size_t i,ref face; triangles)
@@ -206,10 +298,13 @@ class Scene
 
           foreach(size_t i, ref d; data)
           {
-            d.n0 = normals[mesh.faces[i].indices[0]];
-            d.n1 = normals[mesh.faces[i].indices[1]];
-            d.n2 = normals[mesh.faces[i].indices[2]];
+            d.n[0] = normals[mesh.faces[i].indices[0]];
+            d.n[1] = normals[mesh.faces[i].indices[1]];
+            d.n[2] = normals[mesh.faces[i].indices[2]];
             d.material = &m_materials[mesh.materialIndex];
+            d.tex[0] = mesh.texcoords[1][mesh.faces[i].indices[0]];
+            d.tex[1] = mesh.texcoords[1][mesh.faces[i].indices[1]];
+            d.tex[2] = mesh.texcoords[1][mesh.faces[i].indices[2]];
 
             auto up = triangles[i].plane.normal;
             auto dir = vec3(1,0,0);
@@ -236,9 +331,6 @@ class Scene
       uint nextNode = m_triangles.length;
       auto remainingNodes = ThreadLocalStackAllocator.globalInstance.AllocatorNew!(Vector!(Node*))();
       scope(exit) ThreadLocalStackAllocator.globalInstance.AllocatorDelete(remainingNodes);
-
-      auto timer = cast(shared(Timer))New!Timer();
-      scope(exit) Delete(timer);
 
       auto startTime = Zeitpunkt(timer);
 
@@ -436,7 +528,7 @@ class Scene
       else version(UseOctree)
       {
         alias LooseOctree!(Node*, NodeOctreePolicy, PointerHashPolicy, TakeOwnership.no) Octree;
-        auto octree = New!Octree(boundingRadius * 2.0f, 0.1f);
+        auto octree = New!Octree(boundingRadius * 0.5f, 0.001f);
         scope(exit) Delete(octree);
         foreach(size_t i, ref triangle; m_triangles)
         {
@@ -543,10 +635,35 @@ class Scene
       writefln("Building tree took %f seconds", (endTime - startTime) / 1000.0f);
     }
     linearizeNodes();
+
+    // write texture space edges to quad tree
+    /*writefln("Building texture space quad tree ...");
+    auto startQuadTree = Zeitpunkt(timer);
+    m_textureEdges = New!(typeof(m_textureEdges))();
+    auto tenth = m_data.length / 10;
+    auto next = tenth;
+    foreach(size_t i, triangle; m_data)
+    {
+      m_textureEdges.insert(New!Edge2D(triangle.tex[0], triangle.tex[1], i, 0));
+      m_textureEdges.insert(New!Edge2D(triangle.tex[1], triangle.tex[2], i, 0));
+      m_textureEdges.insert(New!Edge2D(triangle.tex[2], triangle.tex[0], i, 0));
+      if(i > next)
+      {
+        writefln("%d %%", next / tenth * 10);
+        next += tenth;
+      }
+    }
+    m_textureEdges.optimize();
+    writefln("Building quad tree took %f seconds", (Zeitpunkt(timer) - startQuadTree) / 1000.0f);*/
   }
 
   ~this()
   {
+    foreach(edge; m_textureEdges.objects)
+    {
+      Delete(edge);
+    }
+    Delete(m_textureEdges);
     Delete(m_data);
     Delete(m_triangles);
     Delete(m_nodes);
@@ -597,15 +714,68 @@ class Scene
                 const float sqrt2 = 1.414213562f;
                 float d1 = fastsqrt((1.0f-u1)*(1.0f-u1) + v1*v1) / sqrt2;
                 float d2 = fastsqrt(u1*u1 + (1.0f-v1)*(1.0f-v1)) / sqrt2;
-                vec3 interpolated1 = ldata.n1 * d1 + ldata.n2 * d2;
+                vec3 interpolated1 = ldata.n[1] * d1 + ldata.n[2] * d2;
 
                 float len = fastsqrt(u1*u1 + v1*v1);
                 float i1 = fastsqrt(u*u+v*v) / len;
                 float i2 = 1.0f - i1;
 
-                normal = ldata.n0 * i2 + interpolated1 * i1;
+                normal = (ldata.n[0] * i2 + interpolated1 * i1).normalized;
                 data = ldata;
                 result = true;
+              }
+            }
+          }
+          else
+          {
+            //non leaf node
+            writeTo[nextWrite++] = node.childs[0];
+            writeTo[nextWrite++] = node.childs[1];
+          }
+        }
+      }
+      numReads = nextWrite;
+      nextWrite = 0;
+      swap(writeTo, readFrom);
+    }
+
+    return result;
+  }
+
+  TraceResult trace(Ray ray, ref float rayPos, ref vec2 texcoords, ref const(TriangleData)* data, IgnoreBackfaces ignoreBackfaces) const 
+  {
+    rayPos = float.max;
+    auto readFrom = g_readFrom;
+    auto writeTo = g_writeTo;
+    uint nextWrite = 0;
+    uint numReads = 1;
+    readFrom[0] = m_rootNode;
+
+    TraceResult result = TraceResult.NoHit;
+
+    while(numReads > 0)
+    {
+      foreach(node; readFrom[0..numReads])
+      {
+        if(node.same || node.sphere.intersects(ray))
+        {
+          if(node.dummy is null)
+          {
+            //leaf node
+            float pos = -1.0f;
+            float u = 0.0f, v = 0.0f;
+            if( node.triangle.intersects(ray, pos, u, v) && pos < rayPos && pos >= FloatEpsilon )
+            {
+              auto n = node.triangle.plane.normal;
+              bool isFrontFace = n.dot(ray.dir) < 0;
+              if(!ignoreBackfaces || isFrontFace)
+              {
+                rayPos = pos;
+                size_t index = cast(size_t)(node.triangle - m_triangles.ptr);
+                const(TriangleData*) ldata = &m_data[index];
+                texcoords = interpolate(u, v, ldata.tex[0], ldata.tex[1], ldata.tex[2]);
+                data = ldata;
+                result = isFrontFace ? TraceResult.FrontFaceHit : TraceResult.BackFaceHit;
               }
             }
           }
@@ -757,6 +927,16 @@ class Scene
     return m_triangles;
   }
 
+  @property const(Material)[] materials() const
+  {
+    return m_materials;
+  }
+
+  auto textureEdges()
+  {
+    return m_textureEdges;
+  }
+
   /**
    * returns a array of all triangle data
    */
@@ -771,7 +951,7 @@ class Scene
   void saveTree(const(char)[] filename)
   {
     auto outFile = scopedRef!Chunkfile(rcstring(filename), Chunkfile.Operation.Write, Chunkfile.DebugMode.Off);
-    outFile.startWriting("tree", 1);
+    outFile.startWriting("tree", 2);
     scope(exit) outFile.endWriting();
 
     outFile.write(int_cast!uint(m_materials.length));
@@ -784,14 +964,17 @@ class Scene
     outFile.write(m_triangles);
     foreach(ref data; m_data)
     {
-      outFile.write(data.n0);
-      outFile.write(data.n1);
-      outFile.write(data.n2);
+      outFile.write(data.n[0]);
+      outFile.write(data.n[1]);
+      outFile.write(data.n[2]);
       assert(data.material != null);
       uint materialIndex = int_cast!uint(data.material - m_materials.ptr);
       assert(materialIndex < m_materials.length);
       outFile.write(materialIndex);
       outFile.write(data.localToWorld);
+      outFile.write(data.tex[0]);
+      outFile.write(data.tex[1]);
+      outFile.write(data.tex[2]);
     }
 
     outFile.write(int_cast!uint(m_nodes.length));
@@ -824,7 +1007,7 @@ class Scene
       throw New!RCException(format("File '%s' is not a tree format", filename));
     }
 
-    if(file.fileVersion != 1)
+    if(file.fileVersion != 2)
     {
       throw New!RCException(format("Tree '%s' does have old format, please reexport", filename));
     }
@@ -852,13 +1035,19 @@ class Scene
     m_data = NewArray!TriangleData(numTriangles);
     foreach(ref data; m_data)
     {
-      file.read(data.n0);
-      file.read(data.n1);
-      file.read(data.n2);
+      file.read(data.n[0]);
+      file.read(data.n[1]);
+      file.read(data.n[2]);
+      data.n[0] = data.n[0].normalized;
+      data.n[1] = data.n[1].normalized;
+      data.n[2] = data.n[2].normalized;
       uint materialIndex;
       file.read(materialIndex);
       data.material = &m_materials[materialIndex];
       file.read(data.localToWorld);
+      file.read(data.tex[0]);
+      file.read(data.tex[1]);
+      file.read(data.tex[2]);
     }
 
     // read nodes

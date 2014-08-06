@@ -10,12 +10,14 @@ import std.random;
 import std.math;
 import core.stdc.math;
 import thBase.container.vector;
+import thBase.container.hashmap;
+import thBase.policies.hashing;
 
 // global variables
 __gshared Camera g_camera;
 __gshared Scene g_scene;
-__gshared uint g_width = 640;
-__gshared uint g_height = 480;
+__gshared uint g_width = 320;
+__gshared uint g_height = 240;
 __gshared uint g_numThreads = 8;
 
 // Holds all information for a single pixel visible on the screen
@@ -42,22 +44,25 @@ struct LightTriangle
   float area; // the area of the light triangle
   float probability;
 }
-__gshared Vector!LightTriangle g_lightTriangles;
-__gshared float g_totalLightSourceArea = 0.0f;
+__gshared Vector!LightTriangle[] g_lightTriangles;
+__gshared float g_totalLightSourceArea[];
 
 // information about sun
 __gshared vec3 g_sunDir;
 __gshared vec3 g_sunRadiance;
 __gshared vec3 g_skyRadiance;
-__gshared bool g_hasSky = true;
-__gshared bool g_hasLights = false;
+__gshared bool g_hasSky = false;
+__gshared bool g_hasLights = true;
 
 // Gets called on program shutdown
 shared static ~this()
 {
   Delete(g_camera);
   Delete(g_scene);
+  foreach(ref light; g_lightTriangles)
+    Delete(light);
   Delete(g_lightTriangles);
+  Delete(g_totalLightSourceArea);
 }
 
 
@@ -65,8 +70,8 @@ shared static ~this()
 void loadScene()
 {
   g_sunDir = vec3(1, 1, 3).normalized();
-  g_sunRadiance = vec3(1.0f, 0.984f, 0.8f) * 10.0f;
-  g_skyRadiance = vec3(0.682f, 0.977f, 1.0f);
+  g_sunRadiance = vec3(1.0f, 0.984f, 0.8f) * 1.0f;
+  g_skyRadiance = vec3(0.682f, 0.977f, 1.0f) * 0.1;
 
   g_camera = New!Camera(30.0f, cast(float)g_height / cast(float)g_width);
   
@@ -76,8 +81,8 @@ void loadScene()
   //g_camera.setTransform(vec3(-1, 26.5f, 10), vec3(0, 0, 9), vec3(0, 0, 1));
   //g_scene = New!Scene("cornell-box.thModel", &fillMaterial);
 
-  g_camera.setTransform(vec3(-660, -350, 600), vec3(-658, -349, 599.8), vec3(0, 0, 1));
-  g_scene = New!Scene("sponza2.tree", &fillMaterial);
+  //g_camera.setTransform(vec3(-660, -350, 600), vec3(-658, -349, 599.8), vec3(0, 0, 1));
+  //g_scene = New!Scene("sponza2.tree", &fillMaterial, mat4.identity);
   
   //g_camera.setTransform(vec3(0,0,0), vec3(0,0.1,1), vec3(0, 0, 1));
 
@@ -89,35 +94,77 @@ void loadScene()
   /*g_camera.setTransform(vec3(3, 3, 3), vec3(0, 0, 0), vec3(0, 0, 1));
   g_scene = New!Scene("chest1.thModel";)*/
 
+  //Kino
+  //vec3 lookDir = vec3(0.96862835f, -0.2058832f, -0.13917311f);
+  //vec3 lookPos = vec3(-145.2f, 18f, 19.6f);
+
+  //Hotel
+  //vec3 lookPos = vec3(151.47f, -12.15f, 18.61f);
+  //vec3 lookDir = vec3(0.79814905, 0.60144836, -0.034899496);
+
+  //Foxy Club
+  vec3 lookPos = vec3(93.907341, -75.220680, 6.9072542);
+  vec3 lookDir = vec3(-0.92492521, -0.37369394, 0.069756448);
+
+  g_camera.setTransform(lookPos, lookPos + lookDir, vec3(0, 0, 1));
+  
+  //g_scene = New!Scene("citymap.tree", &fillMaterialCitymap, mat4.Identity);
+  g_scene = New!Scene("citymapLights.tree", &fillMaterialCitymap, mat4.Identity);
+  //g_scene = New!Scene("citymapLights.thModel", &fillMaterialCitymap, ScaleMatrix(0.1f, 0.1f, 0.1f));
+  //g_scene.saveTree("citymapLights.tree");
+
   //find all light triangles
-  auto lightTriangles = New!(Vector!LightTriangle)();
+  uint numLightMaterials = 0;
+  auto matMap = composite!(Hashmap!(const(Material)*, uint, PointerHashPolicy))(defaultCtor);
+  foreach(ref mat; g_scene.materials)
+  {
+    if(mat.emissive > 0.0f)
+    {
+      matMap[&mat] = numLightMaterials;
+      numLightMaterials++;
+    }
+  }
+  
+  auto lights = NewArray!(Vector!LightTriangle)(numLightMaterials);
+  float[] totalLightSourceArea = NewArray!float(numLightMaterials);
+  totalLightSourceArea[] = 0.0f;
+  foreach(ref lightTriangles; lights)
+  {
+    lightTriangles = New!(Vector!LightTriangle)();
+  }
   foreach(size_t i, ref triangleData; g_scene.triangleData)
   {
     if(triangleData.material !is null && triangleData.material.emissive > 0.0f)
     {
+      assert(matMap.exists(triangleData.material));
+      auto lightIndex = matMap[triangleData.material];
       LightTriangle lightTriangle;
       const(Triangle)* t = &g_scene.triangles[i];
       lightTriangle.v0 = t.v0;
       lightTriangle.e1 = t.v1 - t.v0;
       lightTriangle.e2 = t.v2 - t.v0;
       lightTriangle.area = t.area;
-      lightTriangles ~= lightTriangle;
-      g_totalLightSourceArea += lightTriangle.area;
+      lights[lightIndex] ~= lightTriangle;
+      totalLightSourceArea[lightIndex] += lightTriangle.area;
     }
   }
+  g_totalLightSourceArea = totalLightSourceArea;
   // compute probabilities
-  foreach(ref light; lightTriangles)
+  foreach(size_t i, ref lightTriangles; lights)
   {
-    light.probability = light.area / g_totalLightSourceArea;
+    foreach(ref light; lightTriangles)
+    {
+      light.probability = light.area / totalLightSourceArea[i];
+    }
+    writefln("Light %d has %d light triangles", i, lightTriangles.length);
   }
-  g_lightTriangles = lightTriangles;
-  writefln("Scene has %d light triangles", lightTriangles.length);
+  g_lightTriangles = lights;
 }
 
-vec3 pickRandomLightPoint(ref Random gen)
+vec3 pickRandomLightPoint(ref Random gen, uint lightIndex)
 {
   float a = uniform(0.0f, 1.0f, gen);
-  foreach(ref light; g_lightTriangles)
+  foreach(ref light; g_lightTriangles[lightIndex])
   {
     if(light.probability > a)
     {
@@ -133,7 +180,7 @@ vec3 pickRandomLightPoint(ref Random gen)
     }
     a -= light.probability;
   }
-  auto light = g_lightTriangles[g_lightTriangles.length-1];
+  auto light = g_lightTriangles[lightIndex][g_lightTriangles[lightIndex].length-1];
   while(true)
   {
     float u = uniform(0.0f, 1.0f, gen);
@@ -142,6 +189,57 @@ vec3 pickRandomLightPoint(ref Random gen)
     {
       return light.v0 + light.e1 * v + light.e2 * u;
     }
+  }
+}
+
+void fillMaterialCitymap(ref Material mat, const(char)[] materialName)
+{
+  writefln("%s", materialName);
+  mat.color.x = 0.7f;
+  mat.color.y = 0.7f;
+  mat.color.z = 0.7f;
+  mat.emissive = 0.0f;
+  if(materialName == "Material #10088/City_HotelLight_mat")
+  {
+    mat.color.x = 0.7f;
+    mat.color.y = 0.7f;
+    mat.color.z = 0.7f;
+    mat.emissive = 10.0f;
+  }
+  else if(materialName == "Material #10088/GreenLight")
+  {
+    mat.color.x = 0.0f;
+    mat.color.y = 0.7f;
+    mat.color.z = 0.0f;
+    mat.emissive = 10.0f;
+  }
+  else if(materialName == "Material #10088/City_CinemaDisplay_mat")
+  {
+    mat.color.x = 0.7f;
+    mat.color.y = 0.7f;
+    mat.color.z = 0.7f;
+    mat.emissive = 20.0f;
+  }
+  else if(materialName == "Material #10088/City_CinemaEntrancelamp_mat")
+  {
+    mat.color.x = 0.8f;
+    mat.color.y = 0.8f;
+    mat.color.z = 0.2f;
+    mat.emissive = 160.0f;
+  }
+  else if(materialName == "Material #10088/City_FC_Light_mat")
+  {
+    mat.color.x = 0.7f;
+    mat.color.y = 0.0f;
+    mat.color.z = 0.0F;
+    mat.emissive = 40.0f;
+  }
+  else if(materialName == "Material #10088/City_FC_Logo_mat")
+  {
+    mat.color.x = 0.7f;
+    mat.color.y = 0.0f;
+    mat.color.z = 0.0F;
+    mat.emissive = 30.0f;
   }
 }
 
@@ -301,25 +399,31 @@ vec3 computeLdirect(vec3 x, vec3 theta, ref const(vec3) normalX, const(Scene.Tri
   vec3 L;
   if(g_hasLights)
   {
-    vec3 y = pickRandomLightPoint(gen);
-    float lightDistance = (y - x).length;
-    vec3 phi = (y - x).normalized();
-
-    auto shadowRay = Ray(x + normalX * FloatEpsilon, phi); 
-
-    // compute V(x, y)
-	  float distanceY = 0.0f;
-	  vec3 normalY;
-	  const(Scene.TriangleData)* dataY;
-    if(normalX.dot(phi) > FloatEpsilon && g_scene.trace(shadowRay, distanceY, normalY, dataY))
+    for(uint lightIndex=0; lightIndex<g_lightTriangles.length; lightIndex++)
     {
-      if(distanceY < lightDistance - FloatEpsilon)
+      vec3 y = pickRandomLightPoint(gen, lightIndex);
+      float lightDistance = (y - x).length;
+      vec3 phi = (y - x).normalized();
+
+      auto shadowRay = Ray(x + normalX * FloatEpsilon, phi); 
+
+      // compute V(x, y)
+	    float distanceY = 0.0f;
+	    vec3 normalY;
+	    const(Scene.TriangleData)* dataY;
+      if(normalX.dot(phi) > FloatEpsilon && g_scene.trace(shadowRay, distanceY, normalY, dataY))
       {
-        return vec3(0.0f, 0.0f, 0.0f);
+        if(distanceY > lightDistance - FloatEpsilon)
+        {
+          vec3 Le = dataY.material.emissive * dataY.material.color;
+          float G = normalX.dot(phi) * normalY.dot(-phi) / (lightDistance * lightDistance);
+          if(!(G > 0.0f)) G = 0.0f;
+          assert(G == G);
+          assert(G >= 0.0f);
+          assert((BRDF * data.material.color).dot(Le) * G * g_totalLightSourceArea[lightIndex] >= 0.0f);
+          L += (BRDF * data.material.color) * Le * G * g_totalLightSourceArea[lightIndex];
+        }
       }
-      vec3 Le = dataY.material.emissive * dataY.material.color;
-      float G = normalX.dot(phi) * normalY.dot(-phi) / (lightDistance * lightDistance);
-      L = (BRDF * data.material.color) * Le * G * g_totalLightSourceArea;
     }
   }
   if(g_hasSky)
@@ -367,10 +471,10 @@ void computeL(uint pixelIndex, ref Pixel pixel, ref Random gen)
 	if( g_scene.trace(viewRay, rayPos, normal, data)){
     vec3 hitPos = viewRay.get(rayPos);
     vec3 sum;
-    for(uint i=0; i<N; i++){
+    /*for(uint i=0; i<N; i++){
 			sum += computeLindirect(hitPos, -viewRay.dir, normal, data, gen, 0);
-    }
-    pixel.sum += data.material.emissive * data.material.color + computeLdirect(hitPos, -viewRay.dir, normal, data, gen) + sum / cast(float)N;
+    }*/
+    pixel.sum += data.material.emissive * data.material.color + computeLdirect(hitPos, -viewRay.dir, normal, data, gen);// + sum / cast(float)N;
 	}
 	else{
 		pixel.sum += sampleSky(viewRay.dir);
