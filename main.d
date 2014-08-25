@@ -23,13 +23,14 @@ import sdl;
 import rendering;
 import scene;
 
-enum uint numSamples = 32;
+enum uint numSamples = 33;
 enum uint additionalSkySamples = 512;
 enum uint directLightSamples = 128;
 enum bool extrapolateGeometryEnabled = true;
-enum bool useBlackAmbient = true;
+enum bool useBlackAmbient = false;
 enum bool useCosineDistribution = true;
-enum bool computeDirectLightEnabled = true;
+enum bool computeDirectLightEnabled = false;
+enum bool format1010102 = true;
 
 __gshared vec2 g_blackPixelLocation = vec2(1.0f, 0.0f);
 
@@ -778,17 +779,17 @@ void computeDirectLight(uint offset, Pixel[] pixels, ref Random gen)
     if(!pixel.rastered)
       continue;
     vec3 sum = vec3(0.0f);
-    for(uint i=0; i < 16; i++)
+    for(uint i=0; i < directLightSamples; i++)
     {
       sum += computeLDirect(pixel.position, pixel.normal, gen); 
     }
-    if(sum.squaredLength > FloatEpsilon)
+    /*if(sum.squaredLength > FloatEpsilon)
     {
       for(uint i=16; i < directLightSamples; i++)
       {
         sum += computeLDirect(pixel.position, pixel.normal, gen); 
       }
-    }
+    }*/
     sum = sum / cast(float)directLightSamples;
     pixel.directLight += sum;
     pixel.color = pixel.directLight;
@@ -798,29 +799,75 @@ void computeDirectLight(uint offset, Pixel[] pixels, ref Random gen)
 void writeDDSFiles(uint width, uint height, Pixel[] pixels)
 {
   {
-    auto data = NewArray!ushort(width * height * 4);
-    scope(exit) Delete(data);
-    uint numFiles = (Pixel.samples.length + 1) / 2;
-    for(uint i=0; i<numFiles; i++)
+    static if(format1010102)
     {
-      for(uint y=0; y<height; y++)
+      auto data = NewArray!uint(width * height);
+      scope(exit) Delete(data);
+
+      assert(Pixel.samples.length % 3 == 0);
+      uint numFiles = Pixel.samples.length / 3;
+      for(uint i=0; i<numFiles; i++)
       {
-        for(uint x=0; x<width; x++)
+        for(uint y=0; y<height; y++)
         {
-          data[y * width * 4 + x * 4] = cast(ushort)(pixels[y * width + x].samples[i*2].x * 65535.0f);
-          data[y * width * 4 + x * 4 + 1] = cast(ushort)(pixels[y * width + x].samples[i*2].y * 65535.0f);
-          data[y * width * 4 + x * 4 + 2] = cast(ushort)(pixels[y * width + x].samples[i*2+1].x * 65535.0f);
-          data[y * width * 4 + x * 4 + 3] = cast(ushort)(pixels[y * width + x].samples[i*2+1].y * 65535.0f);
+          for(uint x=0; x<width; x++)
+          {
+            uint first = cast(ushort)(pixels[y * width + x].samples[i*3].x * 1023.0f);
+            uint second = cast(ushort)(pixels[y * width + x].samples[i*3].y * 1023.0f);
+            uint third = cast(ushort)(pixels[y * width + x].samples[i*3+1].x * 1023.0f);
+
+            data[y * width + x] = (first << 22) | (second << 12) | (third << 2);
+          }
         }
+        char[256] name;
+        auto len = formatStatic(name, "gi%d.dds", i*2);
+        WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R10G10B10A2_UNORM, (cast(void*)data.ptr)[0..(width * height * uint.sizeof)]);
+        writefln("%s written", name[0..len]);
+
+        for(uint y=0; y<height; y++)
+        {
+          for(uint x=0; x<width; x++)
+          {
+            uint first = cast(ushort)(pixels[y * width + x].samples[i*3+1].y * 1023.0f);
+            uint second = cast(ushort)(pixels[y * width + x].samples[i*3+2].x * 1023.0f);
+            uint third = cast(ushort)(pixels[y * width + x].samples[i*3+2].y * 1023.0f);
+
+            data[y * width + x] = (first << 22) | (second << 12) | (third << 2);
+          }
+        }
+        len = formatStatic(name, "gi%d.dds", i*2+1);
+        WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R10G10B10A2_UNORM, (cast(void*)data.ptr)[0..(width * height * uint.sizeof)]);
+        writefln("%s written", name[0..len]);
       }
-      char[256] name;
-      auto len = formatStatic(name, "gi%d.dds", i);
-      WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R16G16B16A16_UNORM, (cast(void*)data.ptr)[0..(width * height * 4 * ushort.sizeof)]);
-      writefln("%s written", name[0..len]);
+    }
+    else
+    {
+      auto data = NewArray!ushort(width * height * 4);
+      scope(exit) Delete(data);
+      uint numFiles = (Pixel.samples.length + 1) / 2;
+      for(uint i=0; i<numFiles; i++)
+      {
+        for(uint y=0; y<height; y++)
+        {
+          for(uint x=0; x<width; x++)
+          {
+            data[y * width * 4 + x * 4] = cast(ushort)(pixels[y * width + x].samples[i*2].x * 65535.0f);
+            data[y * width * 4 + x * 4 + 1] = cast(ushort)(pixels[y * width + x].samples[i*2].y * 65535.0f);
+            data[y * width * 4 + x * 4 + 2] = cast(ushort)(pixels[y * width + x].samples[i*2+1].x * 65535.0f);
+            data[y * width * 4 + x * 4 + 3] = cast(ushort)(pixels[y * width + x].samples[i*2+1].y * 65535.0f);
+          }
+        }
+        char[256] name;
+        auto len = formatStatic(name, "gi%d.dds", i);
+        WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R16G16B16A16_UNORM, (cast(void*)data.ptr)[0..(width * height * 4 * ushort.sizeof)]);
+        writefln("%s written", name[0..len]);
+      }
     }
   }
 
   uint maxSkippedSamples = 0;
+  uint minSkippedSamples = uint.max;
+  float avgHitRate = 0.0f;
   {
     auto data = NewArray!ushort(width * height * 2);
     scope(exit) Delete(data);
@@ -835,13 +882,21 @@ void writeDDSFiles(uint width, uint height, Pixel[] pixels)
         data[y * width * 2 + x * 2] = cast(ushort)(ambient * 65535.0f);
         data[y * width * 2 + x * 2 + 1] = cast(ushort)(pixels[y * width + x].numSkippedSamples);
         if(pixels[y * width + x].rastered)
-          maxSkippedSamples = max(maxSkippedSamples, pixels[y * width + x].numSkippedSamples);
+        {
+          uint numSkippedSamples = pixels[y * width + x].numSkippedSamples;
+          maxSkippedSamples = max(maxSkippedSamples, numSkippedSamples);
+          minSkippedSamples = min(minSkippedSamples, numSkippedSamples);
+          avgHitRate += cast(float)numSamples / cast(float)(numSkippedSamples + numSamples);
+        }
       }
     }
     WriteDDS("sky.dds", width, height, DDSLoader.DXGI_FORMAT.R16G16_UNORM, (cast(void*)data.ptr)[0..(width * height * 2 * ushort.sizeof)]);
     writefln("sky.dds written");
   }
+  avgHitRate *= 1.0f / (width * height);
+  writefln("minSkippedSamples = %d", minSkippedSamples);
   writefln("maxSkippedSamples = %d", maxSkippedSamples);
+  writefln("avgHitRate = %f", avgHitRate);
 
   {
     auto data = NewArray!float(width * height * 4);
