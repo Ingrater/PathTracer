@@ -23,6 +23,13 @@ import sdl;
 import rendering;
 import scene;
 
+enum IndirectFormat
+{
+  R16G16B16A16_UNORM,
+  R10G10B10A2_UNORM,
+  R32G32_UINT
+}
+
 enum uint numSamples = 33;
 enum uint additionalSkySamples = 512;
 enum uint directLightSamples = 128;
@@ -30,7 +37,7 @@ enum bool extrapolateGeometryEnabled = true;
 enum bool useBlackAmbient = false;
 enum bool useCosineDistribution = true;
 enum bool computeDirectLightEnabled = false;
-enum bool format1010102 = true;
+enum IndirectFormat indirectFormat = IndirectFormat.R32G32_UINT;
 
 __gshared vec2 g_blackPixelLocation = vec2(1.0f, 0.0f);
 
@@ -796,10 +803,18 @@ void computeDirectLight(uint offset, Pixel[] pixels, ref Random gen)
   }
 }
 
+uint endianessSwap(uint value)
+{
+  ubyte[] rawMemory = (cast(ubyte*)(&value))[0..4];
+  swap(rawMemory[0], rawMemory[3]);
+  swap(rawMemory[1], rawMemory[2]);
+  return value;
+}
+
 void writeDDSFiles(uint width, uint height, Pixel[] pixels)
 {
   {
-    static if(format1010102)
+    static if(indirectFormat == IndirectFormat.R10G10B10A2_UNORM)
     {
       auto data = NewArray!uint(width * height);
       scope(exit) Delete(data);
@@ -812,11 +827,11 @@ void writeDDSFiles(uint width, uint height, Pixel[] pixels)
         {
           for(uint x=0; x<width; x++)
           {
-            uint first = cast(ushort)(pixels[y * width + x].samples[i*3].x * 1023.0f);
-            uint second = cast(ushort)(pixels[y * width + x].samples[i*3].y * 1023.0f);
-            uint third = cast(ushort)(pixels[y * width + x].samples[i*3+1].x * 1023.0f);
+            uint red = cast(ushort)(pixels[y * width + x].samples[i*3].x * 1023.0f);
+            uint green = cast(ushort)(pixels[y * width + x].samples[i*3].y * 1023.0f);
+            uint blue = cast(ushort)(pixels[y * width + x].samples[i*3+1].x * 1023.0f);
 
-            data[y * width + x] = (first << 22) | (second << 12) | (third << 2);
+            data[y * width + x] = ((blue << 20) | (green << 10) | (red << 0));
           }
         }
         char[256] name;
@@ -828,15 +843,46 @@ void writeDDSFiles(uint width, uint height, Pixel[] pixels)
         {
           for(uint x=0; x<width; x++)
           {
-            uint first = cast(ushort)(pixels[y * width + x].samples[i*3+1].y * 1023.0f);
-            uint second = cast(ushort)(pixels[y * width + x].samples[i*3+2].x * 1023.0f);
-            uint third = cast(ushort)(pixels[y * width + x].samples[i*3+2].y * 1023.0f);
+            uint red = cast(ushort)(pixels[y * width + x].samples[i*3+1].y * 1023.0f);
+            uint green = cast(ushort)(pixels[y * width + x].samples[i*3+2].x * 1023.0f);
+            uint blue = cast(ushort)(pixels[y * width + x].samples[i*3+2].y * 1023.0f);
 
-            data[y * width + x] = (first << 22) | (second << 12) | (third << 2);
+            data[y * width + x] = ((blue << 20) | (green << 10) | (red << 0));
           }
         }
         len = formatStatic(name, "gi%d.dds", i*2+1);
         WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R10G10B10A2_UNORM, (cast(void*)data.ptr)[0..(width * height * uint.sizeof)]);
+        writefln("%s written", name[0..len]);
+      }
+    }
+    else static if(indirectFormat == IndirectFormat.R32G32_UINT)
+    {
+      auto data = NewArray!uint(width * height * 2);
+      scope(exit) Delete(data);
+      static assert(numSamples % 3 == 0, "number of samples must be divideable by 3");
+      uint numFiles = numSamples / 3;
+      float fWidthMinusOne = cast(float)(width - 1);
+      float fHeightMinusOne = cast(float)(height - 1);
+      for(uint i=0; i<numFiles; i++)
+      {
+        for(uint y=0; y<height; y++)
+        {
+          for(uint x=0; x<width; x++)
+          {
+            uint red = cast(ushort)(pixels[y * width + x].samples[i*3].x * fWidthMinusOne) & 0x3FF;
+            uint green = cast(ushort)(pixels[y * width + x].samples[i*3].y * fHeightMinusOne) & 0x3FF;
+            uint blue = cast(ushort)(pixels[y * width + x].samples[i*3+1].x * fWidthMinusOne) & 0x3FF;
+            data[y * width * 2 + x * 2] = (red << 20) | (green << 10) | blue;
+
+            red = cast(ushort)(pixels[y * width + x].samples[i*3+1].y * fHeightMinusOne) & 0x3FF;
+            green = cast(ushort)(pixels[y * width + x].samples[i*3+2].x * fWidthMinusOne) & 0x3FF;
+            blue = cast(ushort)(pixels[y * width + x].samples[i*3+2].y * fHeightMinusOne) & 0x3FF;            
+            data[y * width * 2 + x * 2 + 1] = (red << 20) | (green << 10) | blue;
+          }
+        }
+        char[256] name;
+        auto len = formatStatic(name, "gi%d.dds", i);
+        WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R32G32_UINT, (cast(void*)data.ptr)[0..(width * height * 2 * uint.sizeof)]);
         writefln("%s written", name[0..len]);
       }
     }
@@ -962,6 +1008,29 @@ int main(string[] argv)
       return 1;
     }
   }
+
+  /+{
+    auto data = NewArray!uint(g_width * g_height);
+    scope(exit) Delete(data);
+    for(uint y=0; y<g_height; y++)
+    {
+      for(uint x=0; x<g_width; x++)
+      {
+        uint red = (x + (y % 2)) % 2 == 0 ? 0x3FF : 0;
+        uint green = (x + (y % 2)) % 2 == 1 ? 0x1FF : 0;
+        uint blue = 0;
+        uint alpha = (x + (y % 2)) % 2 == 1 ? 0x3 : 0;
+
+        data[y * g_width + x] = /*endianessSwap*/((alpha << 30) | (blue << 20) | (green << 10) | (red << 0));
+      }
+    }
+
+    char[256] name;
+    auto len = formatStatic(name, "gi%d.dds", 0);
+    WriteDDS(name[0..len], g_width, g_height, DDSLoader.DXGI_FORMAT.R10G10B10A2_UNORM, (cast(void*)data.ptr)[0..(g_width * g_height * uint.sizeof)]);
+    writefln("%s written", name[0..len]);
+    return 0;
+  }+/
 
   thBase.asserthandler.Init();
   SDL.LoadDll("SDL.dll","libSDL-1.2.so.0");
