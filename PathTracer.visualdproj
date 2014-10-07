@@ -382,11 +382,13 @@
  </Config>
  <Folder name="PathTracer">
   <File path="camera.d" />
+  <File path="config.d" />
   <File path="main.d" />
   <File path="modelloader.d" />
   <File path="modeltypes.d" />
   <File path="rendering.d" />
   <File path="scene.d" />
   <File path="sdl.d" />
+  <File path="trianglehelpers.d" />
  </Folder>
 </DProject>

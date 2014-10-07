@@ -12,38 +12,20 @@ import thBase.algorithm;
 import thBase.dds;
 import thBase.format;
 import thBase.asserthandler;
+import thBase.casts;
+import thBase.math3d.sh;
 import core.thread;
 static import core.cpuid;
 
 import std.math;
-import core.stdc.math : cosf, sinf;
+import core.stdc.math : cosf, sinf, fabsf;
 import core.stdc.stdlib;
 
 import sdl;
 import rendering;
 import scene;
-
-enum IndirectFormat
-{
-  R16G16B16A16_UNORM,
-  R10G10B10A2_UNORM,
-  R32G32_UINT
-}
-
-enum uint numSamples = 33;
-enum uint additionalSkySamples = 512;
-enum uint directLightSamples = 128;
-enum bool extrapolateGeometryEnabled = true;
-enum bool useBlackAmbient = false;
-enum bool useCosineDistribution = true;
-enum bool computeDirectLightEnabled = false;
-enum IndirectFormat indirectFormat = IndirectFormat.R32G32_UINT;
-
-__gshared vec2 g_blackPixelLocation = vec2(1.0f, 0.0f);
-
-
-enum uint numPrecomputedSamples = 1024;
-__gshared vec2[numPrecomputedSamples][128] g_precomputedSamples;
+import config;
+import trianglehelpers;
 
 //version = PerformanceTest;
 
@@ -192,32 +174,34 @@ void drawScreen(SDL.Surface* screen, Pixel[] pixels)
 __gshared bool g_run = true;
 
 // Task which triggeres the computation
-class PerPixelTask : Task
+class PerElementTask(T) : Task
 {
   private:
-    uint m_pixelOffset;
-    Pixel[] m_pixels;
+    uint m_offset;
+    T[] m_data;
     Random m_gen;
-    void function(uint offset, Pixel[], ref Random) m_func;
+    void function(uint offset, T[], ref Random) m_func;
 
   public:
-    this(TaskIdentifier identifier, void function(uint offset, Pixel[], ref Random) func, uint pixelOffset, Pixel[] pixels)
+    this(TaskIdentifier identifier, void function(uint offset, T[], ref Random) func, uint offset, T[] data, uint seedOffset)
     {
       super(identifier);
-      m_pixelOffset = pixelOffset;
-      m_pixels = pixels;
-      m_gen.seed(m_pixelOffset + cast(uint)pixels[0].n);
+      m_offset = offset;
+      m_data = data;
+      m_gen.seed(m_offset + seedOffset);
       m_func = func;
     }
 
     override void Execute()
     {
       //computeOutputColor(m_pixelOffset, m_pixels, m_gen);
-      m_func(m_pixelOffset, m_pixels, m_gen);
+      m_func(m_offset, m_data, m_gen);
     }
 
     override void OnTaskFinished() {}
 }
+
+alias PerPixelTask = PerElementTask!Pixel;
 
 // Worker thread
 class Worker : Thread
@@ -234,95 +218,6 @@ class Worker : Thread
     g_workerId = m_id;
     g_localTaskQueue.executeTasksUntil( (){ return !g_run; } );
   }
-}
-
-auto interpolate(T)(float u, float v, T val0, T val1, T val2)
-{
-  if(u < 0.0f)
-    u = 0.0f;
-  if(v < 0.0f)
-    v = 0.0f;
-  float uv = (u + v);
-  float u1, v1;
-  if(uv != 0.0f)
-  {
-    float x = 1.0f / uv;
-    u1 = x * u;
-    v1 = x * v;
-  }
-  else
-  {
-    u1 = u;
-    v1 = v;
-  }
-  immutable float sqrt2 = 1.414213562f;
-  float d1 = sqrt((1.0f-u1)*(1.0f-u1) + v1*v1) / sqrt2;
-  float d2 = sqrt(u1*u1 + (1.0f-v1)*(1.0f-v1)) / sqrt2;
-  auto interpolated1 = val1 * d1 + val2 * d2;
-
-  float i1;
-  if(uv != 0.0f)
-  {
-    float len = sqrt(u1*u1 + v1*v1);
-    i1 = sqrt(u*u+v*v) / len; 
-  }
-  else
-  {
-    i1 = 0.0f;
-  }
-  float i2 = 1.0f - i1;
-
-  return val0 * i2 + interpolated1 * i1;
-}
-
-auto extrapolate(T)(float u, float v, T val0, T val1, T val2)
-{
-  float uv = (u + v);
-  float u1, v1;
-  if(uv != 0.0f)
-  {
-    float x = 1.0f / uv;
-    u1 = x * u;
-    v1 = x * v;
-  }
-  else
-  {
-    u1 = u;
-    v1 = v;
-  }
-  immutable float sqrt2 = 1.414213562f;
-  float d1 = sqrt((1.0f-u1)*(1.0f-u1) + v1*v1) / sqrt2;
-  float d2 = sqrt(u1*u1 + (1.0f-v1)*(1.0f-v1)) / sqrt2;
-  auto interpolated1 = val1 * d1 + val2 * d2;
-
-  float i1;
-  if(uv != 0.0f)
-  {
-    float len = sqrt(u1*u1 + v1*v1);
-    i1 = sqrt(u*u+v*v) / len; 
-  }
-  else
-  {
-    i1 = 0.0f;
-  }
-  float i2 = 1.0f - i1;
-
-  return val0 * i2 + interpolated1 * i1;
-}
-
-vec2 computeUV(vec2 val, vec2 v0, vec2 v1, vec2 v2)
-{
-  auto p = v0;
-  auto r1 = (v1 - v0);
-  auto r2 = (v2 - v0);
-  float d = (r1.x * r2.y - r1.y * r2.x);
-  if(d.epsilonCompare(0.0f))
-  {
-    return vec2(float.max, float.max);
-  }
-  float u = (-p.x * r2.y + p.y * r2.x - r2.x * val.y + r2.y * val.x) / d;
-  float v = ( p.x * r1.y - p.y * r1.x + r1.x * val.y - r1.y * val.x) / d;
-  return vec2(u, v);
 }
 
 float g_cylinderRadius = 0.50f;
@@ -430,6 +325,44 @@ void precomputeSamples(ref Random gen)
   }
   auto samplesFile = RawFile(buffer[0..len], "wb");
   samplesFile.writeArray(g_precomputedSamples[]);
+}
+
+void precomputeShDirs()
+{
+
+  static float minDot(vec3 dir, vec3[] comp)
+  {
+    float min = 1.0f - dir.dot(comp[0]);
+    foreach(ref cur; comp[1..$])
+    {
+      float d = 1.0f - cur.dot(dir);
+      if(d < min)
+        min = d;
+    }
+    return min;
+  }
+  Random gen;
+  g_shDirs[0] = vec3(uniform(-1.0f, 1.0f, gen), uniform(-1.0f, 1.0f, gen), uniform(-1.0f, 1.0f, gen)).normalized;
+  for(uint i=1; i < g_shDirs.length; i++)
+  {
+    auto best = vec3(uniform(-1.0f, 1.0f, gen), uniform(-1.0f, 1.0f, gen), uniform(-1.0f, 1.0f, gen)).normalized;
+    auto bestDot = minDot(best, g_shDirs[0..i]);
+    for(uint j=0; j < 10000; j++)
+    {
+      auto next = vec3(uniform(-1.0f, 1.0f, gen), uniform(-1.0f, 1.0f, gen), uniform(-1.0f, 1.0f, gen)).normalized;
+      float nextDot = minDot(next, g_shDirs[0..i]);
+      if(nextDot > bestDot)
+      {
+        bestDot = nextDot;
+        best = next;
+      }
+    }
+    g_shDirs[i] = best;
+  }
+
+  writefln("sh dirs:");
+  foreach(ref dir; g_shDirs)
+    writefln("vec3(%f, %f, %f),", dir.x, dir.y, dir.z);
 }
 
 void pickPrecomputedSample(vec2[] pattern, ref Random gen)
@@ -748,6 +681,73 @@ void takeSamples(uint offset, Pixel[] pixels, ref Random gen)
   }
 }
 
+void computeLightProbeSamples(uint offset, vec2[numLightProbeSamples][] samples, ref Random gen)
+{
+  vec3 cellSize = (g_scene.maxBounds - g_scene.minBounds) / g_shGridSize;
+  vec3 gridOrigin = g_scene.minBounds + (cellSize * 0.5f);
+  uint gridSlicePitch = cast(uint)(g_shGridSize.x * g_shGridSize.y);
+  uint gridLinePitch = cast(uint)(g_shGridSize.x);
+  foreach(uint i, ref sample; samples)
+  {
+    uint z = (offset + i) / gridSlicePitch;
+    auto slice = offset + i - (z * gridSlicePitch);
+    uint y = slice / gridLinePitch;
+    uint x = slice - (y * gridLinePitch);
+    vec3 position = gridOrigin + cellSize * vec3(cast(float)x, cast(float)y, cast(float)z);
+
+    vec3 shiftAxis[6] = [ vec3(1,0,0), vec3(-1,0,0), vec3(0,1,0), vec3(0,-1,0), vec3(0,0,1), vec3(0,0,-1)];
+
+    vec3 shiftDir = cellSize;
+
+    foreach(ref axis; shiftAxis)
+    {
+      Ray sampleRay = Ray(position, axis);
+      float hitDistance = 0.0f;
+      vec2 hitTexcoords;
+      const(Scene.TriangleData)* hitData;
+      auto traceResult = g_scene.trace(sampleRay, hitDistance, hitTexcoords, hitData, IgnoreBackfaces.no);
+      if(traceResult == TraceResult.FrontFaceHit)
+      {
+        shiftDir = vec3(0.0f);
+        break;
+      }
+      else if(traceResult == TraceResult.BackFaceHit)
+      {
+        if(hitDistance < shiftDir.length)
+        {
+          shiftDir = axis * hitDistance;
+        }
+      }
+    }
+
+    float shiftLength = shiftDir.length;
+    if(shiftLength > fabsf(cellSize.x * 0.5f) ||
+       shiftLength > fabsf(cellSize.y * 0.5f) ||
+       shiftLength > fabsf(cellSize.z * 0.5f))
+    {
+      shiftDir = vec3(0.0f);
+    }
+
+    //position = position + shiftDir;
+    foreach(uint j, ref loc; sample)
+    {
+      Ray sampleRay = Ray(position, g_shDirs[j]);
+      float hitDistance = 0.0f;
+      vec2 hitTexcoords;
+      const(Scene.TriangleData)* hitData;
+      auto traceResult = g_scene.trace(sampleRay, hitDistance, hitTexcoords, hitData, IgnoreBackfaces.no);
+      if(traceResult == TraceResult.FrontFaceHit)
+      {
+        loc = hitTexcoords;
+      }
+      else
+      {
+        loc = g_blackPixelLocation;
+      }
+    }
+  }
+}
+
 vec3 computeLDirect(vec3 x, vec3 normalX, ref Random gen)
 {
   vec3 L;
@@ -811,102 +811,169 @@ uint endianessSwap(uint value)
   return value;
 }
 
-void writeDDSFiles(uint width, uint height, Pixel[] pixels)
+void writeDDSFiles(uint width, uint height, Pixel[] pixels, vec2[numLightProbeSamples][] lightProbes)
 {
   {
     static if(indirectFormat == IndirectFormat.R10G10B10A2_UNORM)
     {
-      auto data = NewArray!uint(width * height);
-      scope(exit) Delete(data);
-
-      assert(Pixel.samples.length % 3 == 0);
-      uint numFiles = Pixel.samples.length / 3;
-      for(uint i=0; i<numFiles; i++)
+      static if(computeIndirectionTexturesEnabled)
       {
-        for(uint y=0; y<height; y++)
+        auto data = NewArray!uint(width * height);
+        scope(exit) Delete(data);
+
+        assert(Pixel.samples.length % 3 == 0);
+        uint numFiles = Pixel.samples.length / 3;
+        for(uint i=0; i<numFiles; i++)
         {
-          for(uint x=0; x<width; x++)
+          for(uint y=0; y<height; y++)
           {
-            uint red = cast(ushort)(pixels[y * width + x].samples[i*3].x * 1023.0f);
-            uint green = cast(ushort)(pixels[y * width + x].samples[i*3].y * 1023.0f);
-            uint blue = cast(ushort)(pixels[y * width + x].samples[i*3+1].x * 1023.0f);
+            for(uint x=0; x<width; x++)
+            {
+              uint red = cast(ushort)(pixels[y * width + x].samples[i*3].x * 1023.0f);
+              uint green = cast(ushort)(pixels[y * width + x].samples[i*3].y * 1023.0f);
+              uint blue = cast(ushort)(pixels[y * width + x].samples[i*3+1].x * 1023.0f);
 
-            data[y * width + x] = ((blue << 20) | (green << 10) | (red << 0));
+              data[y * width + x] = ((blue << 20) | (green << 10) | (red << 0));
+            }
           }
-        }
-        char[256] name;
-        auto len = formatStatic(name, "gi%d.dds", i*2);
-        WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R10G10B10A2_UNORM, (cast(void*)data.ptr)[0..(width * height * uint.sizeof)]);
-        writefln("%s written", name[0..len]);
+          char[256] name;
+          auto len = formatStatic(name, "gi%d.dds", i*2);
+          WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R10G10B10A2_UNORM, (cast(void*)data.ptr)[0..(width * height * uint.sizeof)]);
+          writefln("%s written", name[0..len]);
 
-        for(uint y=0; y<height; y++)
-        {
-          for(uint x=0; x<width; x++)
+          for(uint y=0; y<height; y++)
           {
-            uint red = cast(ushort)(pixels[y * width + x].samples[i*3+1].y * 1023.0f);
-            uint green = cast(ushort)(pixels[y * width + x].samples[i*3+2].x * 1023.0f);
-            uint blue = cast(ushort)(pixels[y * width + x].samples[i*3+2].y * 1023.0f);
+            for(uint x=0; x<width; x++)
+            {
+              uint red = cast(ushort)(pixels[y * width + x].samples[i*3+1].y * 1023.0f);
+              uint green = cast(ushort)(pixels[y * width + x].samples[i*3+2].x * 1023.0f);
+              uint blue = cast(ushort)(pixels[y * width + x].samples[i*3+2].y * 1023.0f);
 
-            data[y * width + x] = ((blue << 20) | (green << 10) | (red << 0));
+              data[y * width + x] = ((blue << 20) | (green << 10) | (red << 0));
+            }
           }
+          len = formatStatic(name, "gi%d.dds", i*2+1);
+          WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R10G10B10A2_UNORM, (cast(void*)data.ptr)[0..(width * height * uint.sizeof)]);
+          writefln("%s written", name[0..len]);
         }
-        len = formatStatic(name, "gi%d.dds", i*2+1);
-        WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R10G10B10A2_UNORM, (cast(void*)data.ptr)[0..(width * height * uint.sizeof)]);
-        writefln("%s written", name[0..len]);
       }
     }
     else static if(indirectFormat == IndirectFormat.R32G32_UINT)
     {
-      auto data = NewArray!uint(width * height * 2);
-      scope(exit) Delete(data);
-      static assert(numSamples % 3 == 0, "number of samples must be divideable by 3");
-      uint numFiles = numSamples / 3;
+      uint numFiles;
       float fWidthMinusOne = cast(float)(width - 1);
       float fHeightMinusOne = cast(float)(height - 1);
-      for(uint i=0; i<numFiles; i++)
+      static if(computeIndirectionTexturesEnabled)
       {
-        for(uint y=0; y<height; y++)
+        auto data = NewArray!uint(width * height * 2);
+        scope(exit) Delete(data);
+        static assert(numSamples % 3 == 0, "number of samples must be divideable by 3");
+        numFiles = numSamples / 3;
+        for(uint i=0; i<numFiles; i++)
         {
-          for(uint x=0; x<width; x++)
+          for(uint y=0; y<height; y++)
           {
-            uint red = cast(ushort)(pixels[y * width + x].samples[i*3].x * fWidthMinusOne) & 0x3FF;
-            uint green = cast(ushort)(pixels[y * width + x].samples[i*3].y * fHeightMinusOne) & 0x3FF;
-            uint blue = cast(ushort)(pixels[y * width + x].samples[i*3+1].x * fWidthMinusOne) & 0x3FF;
-            data[y * width * 2 + x * 2] = (red << 20) | (green << 10) | blue;
+            for(uint x=0; x<width; x++)
+            {
+              uint red = cast(ushort)(pixels[y * width + x].samples[i*3].x * fWidthMinusOne) & 0x3FF;
+              uint green = cast(ushort)(pixels[y * width + x].samples[i*3].y * fHeightMinusOne) & 0x3FF;
+              uint blue = cast(ushort)(pixels[y * width + x].samples[i*3+1].x * fWidthMinusOne) & 0x3FF;
+              data[y * width * 2 + x * 2] = (red << 20) | (green << 10) | blue;
 
-            red = cast(ushort)(pixels[y * width + x].samples[i*3+1].y * fHeightMinusOne) & 0x3FF;
-            green = cast(ushort)(pixels[y * width + x].samples[i*3+2].x * fWidthMinusOne) & 0x3FF;
-            blue = cast(ushort)(pixels[y * width + x].samples[i*3+2].y * fHeightMinusOne) & 0x3FF;            
-            data[y * width * 2 + x * 2 + 1] = (red << 20) | (green << 10) | blue;
+              red = cast(ushort)(pixels[y * width + x].samples[i*3+1].y * fHeightMinusOne) & 0x3FF;
+              green = cast(ushort)(pixels[y * width + x].samples[i*3+2].x * fWidthMinusOne) & 0x3FF;
+              blue = cast(ushort)(pixels[y * width + x].samples[i*3+2].y * fHeightMinusOne) & 0x3FF;            
+              data[y * width * 2 + x * 2 + 1] = (red << 20) | (green << 10) | blue;
+            }
           }
+          char[256] name;
+          auto len = formatStatic(name, "gi%d.dds", i);
+          WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R32G32_UINT, (cast(void*)data.ptr)[0..(width * height * 2 * uint.sizeof)]);
+          writefln("%s written", name[0..len]);
         }
-        char[256] name;
-        auto len = formatStatic(name, "gi%d.dds", i);
-        WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R32G32_UINT, (cast(void*)data.ptr)[0..(width * height * 2 * uint.sizeof)]);
-        writefln("%s written", name[0..len]);
+      }
+
+      static if(computeLightProbesEnabled)
+      {
+        numFiles = numLightProbeSamples / 3;
+        auto lightProbeData = NewArray!uint(cast(uint)g_shGridSize.x * cast(uint)g_shGridSize.y * cast(uint)g_shGridSize.z * 2 * numFiles);
+        scope(exit) Delete(lightProbeData);
+        static assert(numLightProbeSamples % 3 == 0, "number of light probe samples must be divideable by 3");
+        
+        
+        uint lightProbeWidth = cast(uint)g_shGridSize.x;
+        uint lightProbeHeight = cast(uint)g_shGridSize.y;
+        uint lightProbeDepth = cast(uint)g_shGridSize.z;
+        uint lightProbeSlice = lightProbeHeight * lightProbeWidth;
+        
+        {
+          for(uint z=0; z<lightProbeDepth; z++)
+          {
+            for(uint y=0; y<lightProbeHeight; y++)
+            {
+              for(uint x=0; x<lightProbeWidth; x++)
+              {
+                immutable uint pixelPos = z * lightProbeSlice + y * lightProbeWidth + x;
+                for(uint i=0; i<numFiles; i++)
+                {
+                  immutable dstPos = z * lightProbeSlice * 2 * numFiles + y * lightProbeWidth * 2 * numFiles + x * 2 * numFiles + i * 2;
+                  uint red = cast(ushort)(lightProbes[pixelPos][i*3].x * fWidthMinusOne) & 0x3FF;
+                  uint green = cast(ushort)(lightProbes[pixelPos][i*3].y * fHeightMinusOne) & 0x3FF;
+                  uint blue = cast(ushort)(lightProbes[pixelPos][i*3+1].x * fWidthMinusOne) & 0x3FF;
+                  lightProbeData[dstPos] = (red << 20) | (green << 10) | blue;
+
+                  red = cast(ushort)(lightProbes[pixelPos][i*3+1].y * fHeightMinusOne) & 0x3FF;
+                  green = cast(ushort)(lightProbes[pixelPos][i*3+2].x * fWidthMinusOne) & 0x3FF;
+                  blue = cast(ushort)(lightProbes[pixelPos][i*3+2].y * fHeightMinusOne) & 0x3FF;            
+                  lightProbeData[dstPos + 1] = (red << 20) | (green << 10) | blue;
+                }
+              }
+            }
+          }
+          WriteDDS("lightProbes.dds", lightProbeWidth * numFiles, lightProbeHeight, lightProbeDepth, DDSLoader.DXGI_FORMAT.R32G32_UINT, (cast(void*)lightProbeData.ptr)[0..(lightProbeData.length * uint.sizeof)]);
+          writefln("lightProbes.dds written");
+        }
+
+        RawFile lightProbeDat;
+        lightProbeDat.open("lightProbes.dat", "wb");
+        lightProbeDat.write(numFiles);
+        lightProbeDat.write(g_scene.minBounds);
+        lightProbeDat.write(g_scene.maxBounds);
+        lightProbeDat.write(g_shGridSize);
+        lightProbeDat.write(1); // lmax
+        lightProbeDat.write(int_cast!uint(g_shDirs.length));
+        foreach(dir; g_shDirs)
+        {
+          auto sh = SH!1.evaluate(dir);
+          lightProbeDat.writeArray(sh.clm);
+        }
+        lightProbeDat.close();
       }
     }
     else
     {
-      auto data = NewArray!ushort(width * height * 4);
-      scope(exit) Delete(data);
-      uint numFiles = (Pixel.samples.length + 1) / 2;
-      for(uint i=0; i<numFiles; i++)
+      static if(computeIndirectionTexturesEnabled)
       {
-        for(uint y=0; y<height; y++)
+        auto data = NewArray!ushort(width * height * 4);
+        scope(exit) Delete(data);
+        uint numFiles = (Pixel.samples.length + 1) / 2;
+        for(uint i=0; i<numFiles; i++)
         {
-          for(uint x=0; x<width; x++)
+          for(uint y=0; y<height; y++)
           {
-            data[y * width * 4 + x * 4] = cast(ushort)(pixels[y * width + x].samples[i*2].x * 65535.0f);
-            data[y * width * 4 + x * 4 + 1] = cast(ushort)(pixels[y * width + x].samples[i*2].y * 65535.0f);
-            data[y * width * 4 + x * 4 + 2] = cast(ushort)(pixels[y * width + x].samples[i*2+1].x * 65535.0f);
-            data[y * width * 4 + x * 4 + 3] = cast(ushort)(pixels[y * width + x].samples[i*2+1].y * 65535.0f);
+            for(uint x=0; x<width; x++)
+            {
+              data[y * width * 4 + x * 4] = cast(ushort)(pixels[y * width + x].samples[i*2].x * 65535.0f);
+              data[y * width * 4 + x * 4 + 1] = cast(ushort)(pixels[y * width + x].samples[i*2].y * 65535.0f);
+              data[y * width * 4 + x * 4 + 2] = cast(ushort)(pixels[y * width + x].samples[i*2+1].x * 65535.0f);
+              data[y * width * 4 + x * 4 + 3] = cast(ushort)(pixels[y * width + x].samples[i*2+1].y * 65535.0f);
+            }
           }
+          char[256] name;
+          auto len = formatStatic(name, "gi%d.dds", i);
+          WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R16G16B16A16_UNORM, (cast(void*)data.ptr)[0..(width * height * 4 * ushort.sizeof)]);
+          writefln("%s written", name[0..len]);
         }
-        char[256] name;
-        auto len = formatStatic(name, "gi%d.dds", i);
-        WriteDDS(name[0..len], width, height, DDSLoader.DXGI_FORMAT.R16G16B16A16_UNORM, (cast(void*)data.ptr)[0..(width * height * 4 * ushort.sizeof)]);
-        writefln("%s written", name[0..len]);
       }
     }
   }
@@ -1064,6 +1131,11 @@ int main(string[] argv)
   scope(exit) Delete(pixels);
   SDL.Event event;
 
+  uint lightProbeSlice = cast(uint)g_shGridSize.x * cast(uint)g_shGridSize.y;
+  uint numLightProbeSlices = cast(uint)g_shGridSize.z;
+  vec2[numLightProbeSamples][] lightProbes = NewArray!(vec2[numLightProbeSamples])(lightProbeSlice * numLightProbeSlices);
+  scope(exit) Delete(lightProbes);
+
   /*
   // draw wireframe
   vec2 screenSize = vec2(cast(float)g_width, cast(float)g_height);
@@ -1113,6 +1185,8 @@ int main(string[] argv)
 
   writefln("computing sampling patterns...");
   precomputeSamples(gen);
+  static if(computeLightProbesEnabled)
+    precomputeShDirs();
   auto endComputeSamples = Zeitpunkt(timer);
   writefln("Computing sampling patterns took %f s", (endComputeSamples - rasterEnd) / 1000.0f);
 
@@ -1124,7 +1198,7 @@ int main(string[] argv)
   for(uint i=0; i < steps; i++)
   {
     auto startIndex = i * step;
-    edgeTasks[i] = New!PerPixelTask(edgeTaskIdentifier, &extrapolateGeometry, startIndex, pixels[startIndex..startIndex+step]);
+    edgeTasks[i] = New!PerPixelTask(edgeTaskIdentifier, &extrapolateGeometry, startIndex, pixels[startIndex..startIndex+step], cast(uint)pixels[startIndex].n);
   }
   scope(exit)
   {
@@ -1138,7 +1212,7 @@ int main(string[] argv)
   for(uint i=0; i < steps; i++)
   {
     auto startIndex = i * step;
-    tasks[i] = New!PerPixelTask(taskIdentifier, &takeSamples, startIndex, pixels[startIndex..startIndex+step]);
+    tasks[i] = New!PerPixelTask(taskIdentifier, &takeSamples, startIndex, pixels[startIndex..startIndex+step], cast(uint)pixels[startIndex].n);
   }
   scope(exit)
   {
@@ -1151,14 +1225,35 @@ int main(string[] argv)
   auto directLightTaskIdentifier = TaskIdentifier.Create!"DirectLight"();
   for(uint i=0; i < steps * 8; i++)
   {
-    auto startIndex = i * step / 8;
-    directLightTasks[i] = New!PerPixelTask(directLightTaskIdentifier, &computeDirectLight, startIndex, pixels[startIndex..startIndex+step]);
+    auto startIndex = i * (step / 8);
+    directLightTasks[i] = New!PerPixelTask(directLightTaskIdentifier, &computeDirectLight, startIndex, pixels[startIndex..startIndex+(step / 8)], cast(uint)pixels[startIndex].n);
   }
   scope(exit)
   {
     foreach(task; directLightTasks)
       Delete(task);
     Delete(directLightTasks);
+  }
+
+  uint lightProbeStep = cast(uint)g_shGridSize.x;
+  uint lightProbeSteps = lightProbes.length / lightProbeStep;
+  assert(lightProbes.length % lightProbeStep == 0);
+  auto lightProbeTaskIdentifier = TaskIdentifier.Create!"LightProbes"();
+  PerElementTask!(vec2[numLightProbeSamples])[] lightProbeTasks;
+  static if(computeLightProbesEnabled)
+  {
+    lightProbeTasks = NewArray!(PerElementTask!(vec2[numLightProbeSamples]))(lightProbeSteps);
+    for(uint i=0; i < lightProbeSteps; i++)
+    {
+      auto startIndex = i * lightProbeStep;
+      lightProbeTasks[i] = New!(PerElementTask!(vec2[numLightProbeSamples]))(lightProbeTaskIdentifier, &computeLightProbeSamples, startIndex, lightProbes[startIndex..startIndex+lightProbeStep], 0);
+    }
+  }
+  scope(exit)
+  {
+    foreach(task; lightProbeTasks)
+      Delete(task);
+    Delete(lightProbeTasks);
   }
 
   SmartPtr!(Worker)[] workers;
@@ -1285,49 +1380,98 @@ int main(string[] argv)
     writefln("computing direct light took %f s", (endDirectLight - endGeometryExtrapolation) / 1000.0f);
 
   // take samples
-  writefln("computing sample locations...");
-  foreach(task; tasks)
+  static if(computeIndirectionTexturesEnabled)
   {
-    spawn(task);
-  }
+    writefln("computing sample locations...");
+    foreach(task; tasks)
+    {
+      spawn(task);
+    }
 
-  while(!taskIdentifier.allFinished && run)
-  {
-    g_localTaskQueue.executeOneTask();
-    drawScreen(screen, pixels);
+    while(!taskIdentifier.allFinished && run)
+    {
+      g_localTaskQueue.executeOneTask();
+      drawScreen(screen, pixels);
 
-    while(SDL.PollEvent(&event)) 
-    {      
-      switch (event.type) 
-      {
-        case SDL.QUIT:
-          run = false;
-          break;
-          /*case SDL.KEYDOWN:
-          run = false;
-          break;*/
-        default:
+      while(SDL.PollEvent(&event)) 
+      {      
+        switch (event.type) 
+        {
+          case SDL.QUIT:
+            run = false;
+            break;
+            /*case SDL.KEYDOWN:
+            run = false;
+            break;*/
+          default:
+        }
       }
     }
-  }
-  if(!run)
-  {
-    g_run = false;
-
-    foreach(worker; workers)
+    if(!run)
     {
-      worker.join(false);
+      g_run = false;
+
+      foreach(worker; workers)
+      {
+        worker.join(false);
+      }
+
+      return 1;
     }
 
-    return 1;
+    auto endTakeSamples = Zeitpunkt(timer);
+    writefln("Computing samples and ambient took %f s", (endTakeSamples - endDirectLight) / 1000.0f);
   }
 
-  auto endTakeSamples = Zeitpunkt(timer);
-  writefln("Computing samples and ambient took %f s", (endTakeSamples - endDirectLight) / 1000.0f);
+  static if(computeLightProbesEnabled)
+  {
+    auto startLightProbes = Zeitpunkt(timer);
 
-  writeDDSFiles(g_width, g_height, pixels);
+    writefln("computing light probe sample locations...");
+    foreach(task; lightProbeTasks)
+    {
+      spawn(task);
+    }
+
+    while(!lightProbeTaskIdentifier.allFinished && run)
+    {
+      g_localTaskQueue.executeOneTask();
+      drawScreen(screen, pixels);
+
+      while(SDL.PollEvent(&event)) 
+      {      
+        switch (event.type) 
+        {
+          case SDL.QUIT:
+            run = false;
+            break;
+            /*case SDL.KEYDOWN:
+            run = false;
+            break;*/
+          default:
+        }
+      }
+    }
+    if(!run)
+    {
+      g_run = false;
+
+      foreach(worker; workers)
+      {
+        worker.join(false);
+      }
+
+      return 1;
+    }
+
+    auto endLightProbes = Zeitpunkt(timer);
+    writefln("compute light probe samples took %f s", (endLightProbes - startLightProbes) / 1000.0f);
+  }
+
+  auto startWriteData = Zeitpunkt(timer);
+  writeDDSFiles(g_width, g_height, pixels, lightProbes);
   auto endWriteData = Zeitpunkt(timer);
-  writefln("writing data took %f s", (endWriteData - endTakeSamples) / 1000.0f);
+  writefln("writing data took %f s", (endWriteData - startWriteData) / 1000.0f);
   writefln("total time taken %f s", (endWriteData - loadSceneStart) / 1000.0f);
 
   uint totalSamples = 0;

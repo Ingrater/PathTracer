@@ -25,7 +25,7 @@ import thBase.string;
 import std.math;
 import core.stdc.math;
 
-import main : interpolate;
+import trianglehelpers;
 
 //version = UseOctree;
 //version = UseTopDown;
@@ -152,6 +152,7 @@ class Scene
   Node* m_rootNode;
   rcstring[] m_materialNames;
   QuadTree!(Edge2D, StdQuadTreePolicy, ReferenceHashPolicy) m_textureEdges;
+  vec3 m_minBounds, m_maxBounds;
 
   this(const(char)[] path, MaterialFunc matFunc, mat4 modelMatrix)
   {
@@ -283,6 +284,8 @@ class Scene
         }
       }
       writefln("minBounds %s, maxBounds %s, boudingRadius %f", minBounds.f[], maxBounds.f[], boundingRadius);
+      m_minBounds = minBounds;
+      m_maxBounds = maxBounds;
 
       /*uint nodesNeeded = 0;
       for(uint i=2; nodesNeeded < m_triangles.length; i*=2)
@@ -900,6 +903,16 @@ class Scene
     return m_textureEdges;
   }
 
+  vec3 minBounds() const
+  {
+    return m_minBounds;
+  }
+
+  vec3 maxBounds() const
+  {
+    return m_maxBounds;
+  }
+
   /**
    * returns a array of all triangle data
    */
@@ -994,6 +1007,21 @@ class Scene
     file.read(numTriangles);
     m_triangles = NewArray!Triangle(numTriangles);
     file.read(m_triangles);
+
+    auto minBounds = vec3(float.max, float.max, float.max);
+    auto maxBounds = vec3(-float.max, -float.max, -float.max);
+    foreach(ref t; m_triangles)
+    {
+      minBounds = minimum(minBounds, t.v0);
+      maxBounds = maximum(maxBounds, t.v0);
+      minBounds = minimum(minBounds, t.v1);
+      maxBounds = maximum(maxBounds, t.v1);
+      minBounds = minimum(minBounds, t.v2);
+      maxBounds = maximum(maxBounds, t.v2);
+    }
+    writefln("minBounds = %s, maxBounds = %s", minBounds.f, maxBounds.f);
+    m_minBounds = minBounds;
+    m_maxBounds = maxBounds;
 
     m_data = NewArray!TriangleData(numTriangles);
     foreach(ref data; m_data)

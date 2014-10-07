@@ -1,6 +1,6 @@
 module rendering;
 
-import main;
+import config;
 import camera;
 import scene;
 
@@ -87,8 +87,8 @@ void loadScene()
   //g_scene = New!Scene("cornell-box-textured.thModel", &fillMaterial, mat4.Identity);
   //g_scene = New!Scene("citymap.thModel", &fillMaterial, ScaleMatrix(0.1f, 0.1f, 0.1f));
   //g_scene.saveTree("citymap.tree");
-  //g_scene = New!Scene("citymap.tree", &fillMaterial, mat4.Identity);
-  g_scene = New!Scene("citymapLights.tree", &fillMaterial, mat4.Identity);
+  g_scene = New!Scene("citymap.tree", &fillMaterial, mat4.Identity);
+  //g_scene = New!Scene("citymapLights.tree", &fillMaterial, mat4.Identity);
 
   //find all light triangles
   uint numLightMaterials = 0;
