@@ -28,6 +28,7 @@ struct Pixel
   // Define additional per pixel values here
   vec3 normal;   // normal in world space
   vec3 position; // position in world space 
+  vec3 emissive;
   vec3 directLight; // direct light from static light sources
   float n = 0.0f;
   vec3 sum;
@@ -87,8 +88,8 @@ void loadScene()
   //g_scene = New!Scene("cornell-box-textured.thModel", &fillMaterial, mat4.Identity);
   //g_scene = New!Scene("citymap.thModel", &fillMaterial, ScaleMatrix(0.1f, 0.1f, 0.1f));
   //g_scene.saveTree("citymap.tree");
-  g_scene = New!Scene("citymap.tree", &fillMaterial, mat4.Identity);
-  //g_scene = New!Scene("citymapLights.tree", &fillMaterial, mat4.Identity);
+  //g_scene = New!Scene("citymap.tree", &fillMaterial, mat4.Identity);
+  g_scene = New!Scene("citymapLights.tree", &fillMaterial, mat4.Identity);
 
   //find all light triangles
   uint numLightMaterials = 0;
@@ -182,42 +183,42 @@ void fillMaterial(ref Material mat, const(char)[] materialName)
     mat.color.x = 0.7f;
     mat.color.y = 0.7f;
     mat.color.z = 0.7f;
-    mat.emissive = 10.0f;
+    mat.emissive = 100.0f;
   }
-  else if(materialName == "Material #10088/GreenLight")
+  /*else if(materialName == "Material #10088/GreenLight")
   {
     mat.color.x = 0.0f;
     mat.color.y = 0.7f;
     mat.color.z = 0.0f;
-    mat.emissive = 10.0f;
-  }
+    mat.emissive = 100.0f;
+  }*/
   else if(materialName == "Material #10088/City_CinemaDisplay_mat")
   {
     mat.color.x = 0.7f;
     mat.color.y = 0.7f;
     mat.color.z = 0.7f;
-    mat.emissive = 20.0f;
+    mat.emissive = 200.0f;
   }
   else if(materialName == "Material #10088/City_CinemaEntrancelamp_mat")
   {
     mat.color.x = 0.8f;
     mat.color.y = 0.8f;
     mat.color.z = 0.2f;
-    mat.emissive = 160.0f;
+    mat.emissive = 1600.0f;
   }
   else if(materialName == "Material #10088/City_FC_Light_mat")
   {
     mat.color.x = 0.7f;
     mat.color.y = 0.0f;
     mat.color.z = 0.0F;
-    mat.emissive = 40.0f;
+    mat.emissive = 400.0f;
   }
   else if(materialName == "Material #10088/City_FC_Logo_mat")
   {
     mat.color.x = 0.7f;
     mat.color.y = 0.0f;
     mat.color.z = 0.0F;
-    mat.emissive = 30.0f;
+    mat.emissive = 300.0f;
   }
 }
 

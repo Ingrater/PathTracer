@@ -520,7 +520,7 @@ void rasterTriangles(size_t from, size_t to, Pixel[] pixels)
         curPixel.rastered = true;
         curPixel.position = interpolate(uv.x, uv.y, wsPos[0], wsPos[1], wsPos[2]);
         curPixel.normal = interpolate(uv.x, uv.y, t.n[0], t.n[1], t.n[2]).normalized;
-        curPixel.directLight = t.material.color * t.material.emissive;
+        curPixel.emissive = t.material.color * t.material.emissive;
         vec2 coords = interpolate(uv.x, uv.y, t.tex[0], t.tex[1], t.tex[2]);
         //curPixel.color = curPixel.position * (1.0f / 20.0f) + vec3(0.5f);
         //curPixel.color = vec3(coords.x, coords.y, 0.0f);
@@ -689,11 +689,13 @@ void computeLightProbeSamples(uint offset, vec2[numLightProbeSamples][] samples,
   uint gridLinePitch = cast(uint)(g_shGridSize.x);
   foreach(uint i, ref sample; samples)
   {
+    
     uint z = (offset + i) / gridSlicePitch;
-    auto slice = offset + i - (z * gridSlicePitch);
-    uint y = slice / gridLinePitch;
-    uint x = slice - (y * gridLinePitch);
+    auto slicePos = (offset + i) - (z * gridSlicePitch);
+    uint y = slicePos / gridLinePitch;
+    uint x = slicePos - (y * gridLinePitch);
     vec3 position = gridOrigin + cellSize * vec3(cast(float)x, cast(float)y, cast(float)z);
+    //writefln("computing %d => %d %d %d", (offset + i), x, y, z);
 
     vec3 shiftAxis[6] = [ vec3(1,0,0), vec3(-1,0,0), vec3(0,1,0), vec3(0,-1,0), vec3(0,0,1), vec3(0,0,-1)];
 
@@ -785,11 +787,13 @@ void computeDirectLight(uint offset, Pixel[] pixels, ref Random gen)
   {
     if(!pixel.rastered)
       continue;
-    vec3 sum = vec3(0.0f);
+    pixel.sum += computeLDirect(pixel.position, pixel.normal, gen); 
+    pixel.n += 1.0f;
+    /*vec3 sum = vec3(0.0f);
     for(uint i=0; i < directLightSamples; i++)
     {
       sum += computeLDirect(pixel.position, pixel.normal, gen); 
-    }
+    }*/
     /*if(sum.squaredLength > FloatEpsilon)
     {
       for(uint i=16; i < directLightSamples; i++)
@@ -797,8 +801,8 @@ void computeDirectLight(uint offset, Pixel[] pixels, ref Random gen)
         sum += computeLDirect(pixel.position, pixel.normal, gen); 
       }
     }*/
-    sum = sum / cast(float)directLightSamples;
-    pixel.directLight += sum;
+    //sum = sum / cast(float)directLightSamples;
+    pixel.directLight = pixel.emissive + pixel.sum / pixel.n;
     pixel.color = pixel.directLight;
   }
 }
@@ -905,6 +909,8 @@ void writeDDSFiles(uint width, uint height, Pixel[] pixels, vec2[numLightProbeSa
         uint lightProbeHeight = cast(uint)g_shGridSize.y;
         uint lightProbeDepth = cast(uint)g_shGridSize.z;
         uint lightProbeSlice = lightProbeHeight * lightProbeWidth;
+
+        uint nextWrite = 0;
         
         {
           for(uint z=0; z<lightProbeDepth; z++)
@@ -914,18 +920,23 @@ void writeDDSFiles(uint width, uint height, Pixel[] pixels, vec2[numLightProbeSa
               for(uint x=0; x<lightProbeWidth; x++)
               {
                 immutable uint pixelPos = z * lightProbeSlice + y * lightProbeWidth + x;
+                //writefln("reading %d", pixelPos);
                 for(uint i=0; i<numFiles; i++)
                 {
                   immutable dstPos = z * lightProbeSlice * 2 * numFiles + y * lightProbeWidth * 2 * numFiles + x * 2 * numFiles + i * 2;
-                  uint red = cast(ushort)(lightProbes[pixelPos][i*3].x * fWidthMinusOne) & 0x3FF;
-                  uint green = cast(ushort)(lightProbes[pixelPos][i*3].y * fHeightMinusOne) & 0x3FF;
-                  uint blue = cast(ushort)(lightProbes[pixelPos][i*3+1].x * fWidthMinusOne) & 0x3FF;
+                  uint red =   cast(ushort)(lightProbes[pixelPos][i*3  ].x * fWidthMinusOne) & 0x3FF;
+                  uint green = cast(ushort)(lightProbes[pixelPos][i*3  ].y * fHeightMinusOne) & 0x3FF;
+                  uint blue =  cast(ushort)(lightProbes[pixelPos][i*3+1].x * fWidthMinusOne) & 0x3FF;
                   lightProbeData[dstPos] = (red << 20) | (green << 10) | blue;
+                  assert(dstPos == nextWrite);
+                  nextWrite++;
 
-                  red = cast(ushort)(lightProbes[pixelPos][i*3+1].y * fHeightMinusOne) & 0x3FF;
-                  green = cast(ushort)(lightProbes[pixelPos][i*3+2].x * fWidthMinusOne) & 0x3FF;
-                  blue = cast(ushort)(lightProbes[pixelPos][i*3+2].y * fHeightMinusOne) & 0x3FF;            
+                  red =        cast(ushort)(lightProbes[pixelPos][i*3+1].y * fHeightMinusOne) & 0x3FF;
+                  green =      cast(ushort)(lightProbes[pixelPos][i*3+2].x * fWidthMinusOne) & 0x3FF;
+                  blue =       cast(ushort)(lightProbes[pixelPos][i*3+2].y * fHeightMinusOne) & 0x3FF;            
                   lightProbeData[dstPos + 1] = (red << 20) | (green << 10) | blue;
+                  assert(dstPos + 1 == nextWrite);
+                  nextWrite++;
                 }
               }
             }
@@ -1337,42 +1348,33 @@ int main(string[] argv)
   // compute direct light
   static if(computeDirectLightEnabled)
   {
+    uint directLightStep = 0;
     writefln("computing direct light..");
-    foreach(task; directLightTasks)
+    while(run)
     {
-      spawn(task);
-    }
+      foreach(task; directLightTasks)
+      {
+        spawn(task);
+      }
 
-    while(!directLightTaskIdentifier.allFinished && run)
-      //while(true)
-    {
-      g_localTaskQueue.executeOneTask();
-      drawScreen(screen, pixels);
+      while(!directLightTaskIdentifier.allFinished)
+        //while(true)
+      {
+        g_localTaskQueue.executeOneTask();
+        drawScreen(screen, pixels);
 
-      while(SDL.PollEvent(&event)) 
-      {      
-        switch (event.type) 
-        {
-          case SDL.QUIT:
-            run = false;
-            break;
-            /*case SDL.KEYDOWN:
-            run = false;
-            break;*/
-          default:
+        while(SDL.PollEvent(&event)) 
+        {      
+          switch (event.type) 
+          {
+            case SDL.KEYDOWN:
+              run = false;
+              break;
+            default:
+          }
         }
       }
-    }
-    if(!run)
-    {
-      g_run = false;
-
-      foreach(worker; workers)
-      {
-        worker.join(false);
-      }
-
-      return 1;
+      writefln("step %d done", ++directLightStep);
     }
   }
   auto endDirectLight = Zeitpunkt(timer);
